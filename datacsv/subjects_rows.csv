@@ -1,0 +1,5 @@
+id,name,code,color,created_at,updated_at
+a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11,Physics,PHY,bg-sky-50 text-sky-700 border-sky-200,2026-08-27 14:18:06.780169+00,2026-08-27 14:18:06.780169+00
+a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12,Chemistry,CHE,bg-indigo-50 text-indigo-700 border-indigo-200,2026-08-27 14:18:06.780169+00,2026-08-27 14:18:06.780169+00
+a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a13,Biology,BIO,bg-emerald-50 text-emerald-700 border-emerald-200,2026-08-27 14:18:06.780169+00,2026-08-27 14:18:06.780169+00
+a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a14,Mathematics,MAT,bg-amber-50 text-amber-700 border-amber-200,2026-09-03 06:51:47.467708+00,2026-09-03 06:51:47.467708+00

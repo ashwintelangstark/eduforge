@@ -1,0 +1,6 @@
+id,email,name,role,assigned_subject,created_at,updated_at
+e0eebc99-9c0b-4ef8-bb6d-6bb9bd380e11,admin@eduforge.com,System Admin,admin,All,2026-08-29 07:32:56.754314+00,2026-08-29 07:32:56.754314+00
+e0eebc99-9c0b-4ef8-bb6d-6bb9bd380e12,physics@eduforge.com,Physics Faculty,faculty,Physics,2026-08-29 07:32:56.754314+00,2026-08-29 07:32:56.754314+00
+e0eebc99-9c0b-4ef8-bb6d-6bb9bd380e13,chemistry@eduforge.com,Chemistry Faculty,faculty,Chemistry,2026-08-29 07:32:56.754314+00,2026-08-29 07:32:56.754314+00
+e0eebc99-9c0b-4ef8-bb6d-6bb9bd380e14,biology@eduforge.com,Biology Faculty,faculty,Biology,2026-08-29 07:32:56.754314+00,2026-08-29 07:32:56.754314+00
+e0eebc99-9c0b-4ef8-bb6d-6bb9bd380e15,maths@eduforge.com,Mathematics Faculty,faculty,Mathematics,2026-08-29 07:32:56.754314+00,2026-08-29 07:32:56.754314+00
