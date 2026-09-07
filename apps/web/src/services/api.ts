@@ -8,39 +8,19 @@ import { symbolsApi } from './api/symbols.js';
 import { scienceApi } from './api/science.js';
 import { settingsApi } from './api/settings.js';
 import { attemptsApi } from './api/attempts.js';
-import { supabaseDirect } from './supabaseDirect.js';
 import { apiCache } from './apiCache.js';
 
-// Fast parallel resolution helper with ultra-responsive 200ms timeout
-async function withFallback<T>(primaryFn: () => Promise<T>, fallbackFn: () => Promise<T>): Promise<T> {
-  try {
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('API request timeout, switching to direct data engine')), 200)
-    );
-    const result = await Promise.race([primaryFn(), timeoutPromise]);
-    if (result && Array.isArray(result) && result.length === 0) {
-      const fallbackResult = await fallbackFn().catch(() => null);
-      if (fallbackResult && Array.isArray(fallbackResult) && fallbackResult.length > 0) {
-        return fallbackResult;
-      }
-    }
-    return result;
-  } catch (err) {
-    return fallbackFn();
-  }
-}
-
 export const api = {
-  // Papers & Documents
-  getDocuments: () => apiCache.fetchWithCache('documents', () => withFallback(() => papersApi.getDocuments(), () => supabaseDirect.getDocuments())),
-  getDocument: (id: string) => withFallback(() => papersApi.getDocument(id), () => supabaseDirect.getDocument(id) as any),
+  // Papers & Documents (MySQL via Express Server)
+  getDocuments: () => apiCache.fetchWithCache('documents', () => papersApi.getDocuments()),
+  getDocument: (id: string) => papersApi.getDocument(id),
   createDocument: async (doc: any) => {
     apiCache.invalidate('documents');
-    return withFallback(() => papersApi.createDocument(doc), () => supabaseDirect.createDocument(doc));
+    return papersApi.createDocument(doc);
   },
   updateDocument: async (id: string, doc: any) => {
     apiCache.invalidate('documents');
-    return withFallback(() => papersApi.updateDocument(id, doc), () => supabaseDirect.updateDocument(id, doc));
+    return papersApi.updateDocument(id, doc);
   },
   duplicateDocument: async (id: string) => {
     apiCache.invalidate('documents');
@@ -48,67 +28,67 @@ export const api = {
   },
   deleteDocument: async (id: string) => {
     apiCache.invalidate('documents');
-    return withFallback(() => papersApi.deleteDocument(id), () => supabaseDirect.deleteDocument(id));
+    return papersApi.deleteDocument(id);
   },
   exportDocx: papersApi.exportDocx.bind(papersApi),
   exportPdfHtml: papersApi.exportPdfHtml.bind(papersApi),
 
-  // Test Attempt Logs
-  getAttempts: () => apiCache.fetchWithCache('attempts', () => withFallback(() => attemptsApi.getAttempts(), () => supabaseDirect.getAttempts())),
+  // Test Attempt Logs (MySQL)
+  getAttempts: () => apiCache.fetchWithCache('attempts', () => attemptsApi.getAttempts()),
   getAttempt: attemptsApi.getAttempt.bind(attemptsApi),
   createAttempt: (doc: any) => attemptsApi.createAttempt(doc),
   updateAttempt: (id: string, doc: any) => attemptsApi.updateAttempt(id, doc),
   deleteAttempt: (id: string) => attemptsApi.deleteAttempt(id),
 
-  // Subjects & Chapters
-  getSubjects: () => apiCache.fetchWithCache('subjects', () => withFallback(() => subjectsApi.getSubjects(), () => supabaseDirect.getSubjects()), 120000),
+  // Subjects & Chapters (MySQL)
+  getSubjects: () => apiCache.fetchWithCache('subjects', () => subjectsApi.getSubjects(), 30000),
   createSubject: async (sub: any) => {
     apiCache.invalidate('subjects');
-    return withFallback(() => subjectsApi.createSubject(sub), () => supabaseDirect.createSubject(sub));
+    return subjectsApi.createSubject(sub);
   },
   updateSubject: async (id: string, sub: any) => {
     apiCache.invalidate('subjects');
-    return withFallback(() => subjectsApi.updateSubject(id, sub), () => supabaseDirect.updateSubject(id, sub));
+    return subjectsApi.updateSubject(id, sub);
   },
   deleteSubject: async (id: string) => {
     apiCache.invalidate('subjects');
-    return withFallback(() => subjectsApi.deleteSubject(id), () => supabaseDirect.deleteSubject(id));
+    return subjectsApi.deleteSubject(id);
   },
-  getChapters: (subjectId?: string) => apiCache.fetchWithCache(`chapters-${subjectId || 'all'}`, () => withFallback(() => chaptersApi.getChapters(subjectId), () => supabaseDirect.getChapters(subjectId)), 120000),
+  getChapters: (subjectId?: string) => apiCache.fetchWithCache(`chapters-${subjectId || 'all'}`, () => chaptersApi.getChapters(subjectId), 30000),
   createChapter: async (subjectId: string, chapter: any) => {
     apiCache.invalidate('chapters');
-    return withFallback(() => chaptersApi.createChapter(subjectId, chapter), () => supabaseDirect.createChapter(subjectId, chapter));
+    return chaptersApi.createChapter(subjectId, chapter);
   },
   updateChapter: async (id: string, chapter: any) => {
     apiCache.invalidate('chapters');
-    return withFallback(() => chaptersApi.updateChapter(id, chapter), () => supabaseDirect.updateChapter(id, chapter));
+    return chaptersApi.updateChapter(id, chapter);
   },
   deleteChapter: async (id: string) => {
     apiCache.invalidate('chapters');
-    return withFallback(() => chaptersApi.deleteChapter(id), () => supabaseDirect.deleteChapter(id));
+    return chaptersApi.deleteChapter(id);
   },
 
-  // Questions
+  // Questions (MySQL)
   getQuestions: (filters?: Record<string, any>, forceRefresh = false) => {
     const key = `questions-${JSON.stringify(filters || {})}`;
-    return apiCache.fetchWithCache(key, () => withFallback(() => questionsApi.getQuestions(filters), () => supabaseDirect.getQuestions(filters)), 10000, forceRefresh);
+    return apiCache.fetchWithCache(key, () => questionsApi.getQuestions(filters), 10000, forceRefresh);
   },
   getQuestionSummaries: (filters?: Record<string, any>, forceRefresh = false) => {
     const key = `qsummaries-${JSON.stringify(filters || {})}`;
-    return apiCache.fetchWithCache(key, () => withFallback(() => questionsApi.getQuestionSummaries(filters), () => supabaseDirect.getQuestions(filters)), 10000, forceRefresh);
+    return apiCache.fetchWithCache(key, () => questionsApi.getQuestionSummaries(filters), 10000, forceRefresh);
   },
-  getQuestion: (id: string) => withFallback(() => questionsApi.getQuestion(id), () => supabaseDirect.getQuestion(id) as any),
+  getQuestion: (id: string) => questionsApi.getQuestion(id),
   createQuestion: async (question: any) => {
     apiCache.invalidate('questions');
     apiCache.invalidate('qsummaries');
     apiCache.invalidate('media');
-    return withFallback(() => questionsApi.createQuestion(question), () => supabaseDirect.createQuestion(question));
+    return questionsApi.createQuestion(question);
   },
   updateQuestion: async (id: string, question: any) => {
     apiCache.invalidate('questions');
     apiCache.invalidate('qsummaries');
     apiCache.invalidate('media');
-    return withFallback(() => questionsApi.updateQuestion(id, question), () => supabaseDirect.updateQuestion(id, question));
+    return questionsApi.updateQuestion(id, question);
   },
   duplicateQuestion: async (id: string) => {
     apiCache.invalidate('questions');
@@ -120,13 +100,13 @@ export const api = {
     apiCache.invalidate('questions');
     apiCache.invalidate('qsummaries');
     apiCache.invalidate('media');
-    return withFallback(() => questionsApi.deleteQuestion(id), () => supabaseDirect.deleteQuestion(id));
+    return questionsApi.deleteQuestion(id);
   },
   deleteMultipleQuestions: async (ids: string[]) => {
     apiCache.invalidate('questions');
     apiCache.invalidate('qsummaries');
     apiCache.invalidate('media');
-    return withFallback(() => questionsApi.deleteMultipleQuestions(ids), () => supabaseDirect.deleteMultipleQuestions(ids));
+    return questionsApi.deleteMultipleQuestions(ids);
   },
   importQuestions: async (data: any) => {
     apiCache.invalidate('questions');
@@ -136,32 +116,32 @@ export const api = {
   },
   getQuestionBankExportUrl: () => '/api/question-bank/export',
 
-  // Templates
-  getTemplates: (forceRefresh = false) => apiCache.fetchWithCache('templates', () => withFallback(() => templatesApi.getTemplates(), () => supabaseDirect.getTemplates()), 30000, forceRefresh),
+  // Templates (MySQL)
+  getTemplates: (forceRefresh = false) => apiCache.fetchWithCache('templates', () => templatesApi.getTemplates(), 30000, forceRefresh),
   getTemplate: templatesApi.getTemplate.bind(templatesApi),
   createTemplate: (t: any) => templatesApi.createTemplate(t),
   deleteTemplate: (id: string) => templatesApi.deleteTemplate(id),
 
-  // Assets & Media
-  getMedia: (subject?: string, forceRefresh = false) => apiCache.fetchWithCache(`media-${subject || 'all'}`, () => withFallback(() => assetsApi.getMedia(subject), () => supabaseDirect.getMedia(subject)), 10000, forceRefresh),
+  // Assets & Media (MySQL)
+  getMedia: (subject?: string, forceRefresh = false) => apiCache.fetchWithCache(`media-${subject || 'all'}`, () => assetsApi.getMedia(subject), 10000, forceRefresh),
   uploadAsset: async (file: File, subject?: string) => {
     apiCache.invalidate('media');
-    return withFallback(() => assetsApi.uploadAsset(file, subject), () => supabaseDirect.uploadAsset(file, subject));
+    return assetsApi.uploadAsset(file, subject);
   },
   uploadImage: async (file: File, subject?: string) => {
     apiCache.invalidate('media');
-    return withFallback(() => assetsApi.uploadImage(file, subject), () => supabaseDirect.uploadAsset(file, subject));
+    return assetsApi.uploadImage(file, subject);
   },
   uploadBase64Image: async (base64Str: string, subject?: string, name?: string) => {
     apiCache.invalidate('media');
-    return supabaseDirect.uploadBase64Image(base64Str, subject, name);
+    return assetsApi.uploadBase64Image(base64Str, subject, name);
   },
   deleteMedia: async (id: string) => {
     apiCache.invalidate('media');
-    return withFallback(() => assetsApi.deleteMedia(id), () => supabaseDirect.deleteMedia(id));
+    return assetsApi.deleteMedia(id);
   },
 
-  // Symbols & Science
+  // Symbols & Science (MySQL)
   getSymbols: symbolsApi.getSymbols.bind(symbolsApi),
   getPhysicsChapters: scienceApi.getPhysicsChapters.bind(scienceApi),
   getChemistryElements: scienceApi.getChemistryElements.bind(scienceApi),
@@ -170,7 +150,7 @@ export const api = {
   getPrefixes: scienceApi.getPrefixes.bind(scienceApi),
   getConstants: scienceApi.getConstants.bind(scienceApi),
 
-  // Settings
+  // Settings (MySQL)
   getSettings: settingsApi.getSettings.bind(settingsApi),
   updateSettings: settingsApi.updateSettings.bind(settingsApi)
 };

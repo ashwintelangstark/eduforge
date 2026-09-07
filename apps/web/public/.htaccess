@@ -1,9 +1,28 @@
+# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION BEGIN
+PassengerAppRoot "/home/agrikart/eduforge.haegl.in/api"
+PassengerBaseURI "/api"
+PassengerNodejs "/home/agrikart/nodevenv/eduforge.haegl.in/api/22/bin/node"
+PassengerAppType node
+PassengerStartupFile server.js
+# DO NOT REMOVE. CLOUDLINUX PASSENGER CONFIGURATION END
+
 <IfModule mod_rewrite.c>
   RewriteEngine On
   RewriteBase /
 
-  # Do NOT rewrite backend /api requests (pass through to Passenger / subfolder)
+  # Forward Authorization Header to backend
+  RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+  # Forward /api requests to the Node.js application (do NOT rewrite to index.html)
   RewriteRule ^api(/.*)?$ - [L]
+
+  # Forward /uploads/ and /public/uploads/ requests directly to /api/uploads/
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteRule ^uploads/(.*)$ /api/uploads/$1 [L,R=301]
+
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteRule ^public/uploads/(.*)$ /api/uploads/$1 [L,R=301]
+
 
   # If requested file or directory exists, serve it directly
   RewriteCond %{REQUEST_FILENAME} -f [OR]
@@ -14,12 +33,12 @@
   RewriteRule ^ index.html [L]
 </IfModule>
 
-# 1. Enable On-The-Fly Gzip/Deflate Compression for EduForge Web Assets
+# 1. Enable Compression
 <IfModule mod_deflate.c>
   AddOutputFilterByType DEFLATE text/html text/plain text/xml text/css text/javascript application/javascript application/x-javascript application/json application/xml image/svg+xml
 </IfModule>
 
-# 2. Enable Aggressive Browser Caching for Compiled JS, CSS, Fonts, and Media
+# 2. Browser Caching
 <IfModule mod_expires.c>
   ExpiresActive On
   ExpiresDefault "access plus 1 month"
@@ -28,15 +47,6 @@
   ExpiresByType text/css "access plus 1 year"
   ExpiresByType application/javascript "access plus 1 year"
   ExpiresByType text/javascript "access plus 1 year"
-  ExpiresByType image/x-icon "access plus 1 year"
-  ExpiresByType image/icon "access plus 1 year"
-  ExpiresByType image/png "access plus 1 year"
-  ExpiresByType image/jpg "access plus 1 year"
-  ExpiresByType image/jpeg "access plus 1 year"
-  ExpiresByType image/svg+xml "access plus 1 year"
-  ExpiresByType font/woff2 "access plus 1 year"
-  ExpiresByType font/woff "access plus 1 year"
-  ExpiresByType font/ttf "access plus 1 year"
 </IfModule>
 
 # 3. HTTP Header Controls

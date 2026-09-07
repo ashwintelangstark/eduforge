@@ -70,6 +70,11 @@ export const StudentPreviewDrawer: React.FC<StudentPreviewDrawerProps> = ({
     const cleanUrl = url.trim();
     if (!cleanUrl) return true;
 
+    // If target text does not contain an <img> tag, it is NOT rendered inline
+    if (!/<img\s+[^>]*>/i.test(targetText)) {
+      return false;
+    }
+
     // 1. Direct string or encoded URL match
     if (targetText.includes(cleanUrl) || targetText.includes(encodeURI(cleanUrl))) {
       return true;
@@ -215,6 +220,16 @@ export const StudentPreviewDrawer: React.FC<StudentPreviewDrawerProps> = ({
                       alt={`Question illustration ${imgIdx + 1}`}
                       className="max-h-64 max-w-full object-contain rounded-lg"
                       loading="lazy"
+                      onError={(e) => {
+                        const target = e.currentTarget;
+                        if (!target.dataset.triedFallback) {
+                          target.dataset.triedFallback = 'true';
+                          const cur = target.src;
+                          if (cur.includes('/uploads/') && !cur.includes('/api/uploads/')) {
+                            target.src = cur.replace('/uploads/', '/api/uploads/');
+                          }
+                        }
+                      }}
                     />
                   </div>
                 );
@@ -256,6 +271,16 @@ export const StudentPreviewDrawer: React.FC<StudentPreviewDrawerProps> = ({
                             src={resolveImageUrl(optImg)}
                             alt={`Option ${opt.key || idx}`}
                             className="max-h-36 max-w-full object-contain rounded"
+                            onError={(e) => {
+                              const target = e.currentTarget;
+                              if (!target.dataset.triedFallback) {
+                                target.dataset.triedFallback = 'true';
+                                const cur = target.src;
+                                if (cur.includes('/uploads/') && !cur.includes('/api/uploads/')) {
+                                  target.src = cur.replace('/uploads/', '/api/uploads/');
+                                }
+                              }
+                            }}
                           />
                         </div>
                       )}

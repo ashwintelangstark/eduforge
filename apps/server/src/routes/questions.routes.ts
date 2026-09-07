@@ -1,120 +1,257 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { supabase } from '../config/supabase.js';
+import crypto from 'crypto';
+import path from 'path';
+import fs from 'fs';
+import { db } from '../config/mysql.js';
+import { primaryUploadsDir, mirrorFile, possibleUploadDirs } from './assets.routes.js';
 
 export const questionsRouter = Router();
 
-// GET /api/questions - Full question list with options
+// Helper to safely parse JSON or return original
+function parseJsonField(val: any, defaultVal: any = []) {
+  if (val === null || val === undefined) return defaultVal;
+  if (typeof val === 'object') return val;
+  try {
+    return JSON.parse(val);
+  } catch (e) {
+    return defaultVal;
+  }
+}
+
+// Automatically extracts base64 data URIs from input, dumps them into public/uploads,
+// records them in the MySQL assets table, and returns the updated content with /uploads/ path.
+export async function dumpBase64Images(data: any): Promise<any> {
+  if (!data) return data;
+
+  if (typeof data === 'string') {
+    // Check for single data URI or HTML with data URIs
+    const base64Regex = /data:image\/([a-zA-Z+]+);base64,([A-Za-z0-9+/=]+)/g;
+    let match;
+    let resultStr = data;
+
+    // Direct single data URI
+    if (data.startsWith('data:image/')) {
+      const singleMatch = data.match(/^data:image\/([a-zA-Z+]+);base64,(.+)$/);
+      if (singleMatch) {
+        const mimeSub = singleMatch[1];
+        const ext = mimeSub.includes('jpeg') || mimeSub.includes('jpg') ? '.jpg' : (mimeSub.includes('webp') ? '.webp' : '.png');
+        const buffer = Buffer.from(singleMatch[2], 'base64');
+        const unique = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}${ext}`;
+        const filePath = path.join(primaryUploadsDir, unique);
+        fs.writeFileSync(filePath, buffer);
+        mirrorFile(unique);
+        const publicUrl = `/uploads/${unique}`;
+        try {
+          await db.query(
+            `INSERT INTO \`assets\` (\`id\`, \`storage_path\`, \`public_url\`, \`filename\`, \`mime_type\`, \`size_bytes\`)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [crypto.randomUUID(), `uploads/${unique}`, publicUrl, unique, `image/${mimeSub}`, buffer.length]
+          );
+        } catch {}
+        return publicUrl;
+      }
+    }
+
+    // Replace embedded data URIs in HTML/strings
+    const matches: { full: string; mime: string; b64: string }[] = [];
+    while ((match = base64Regex.exec(data)) !== null) {
+      matches.push({ full: match[0], mime: match[1], b64: match[2] });
+    }
+
+    for (const m of matches) {
+      try {
+        const ext = m.mime.includes('jpeg') || m.mime.includes('jpg') ? '.jpg' : (m.mime.includes('webp') ? '.webp' : '.png');
+        const buffer = Buffer.from(m.b64, 'base64');
+        const unique = `${Date.now()}_${Math.random().toString(36).substring(2, 8)}${ext}`;
+        const filePath = path.join(primaryUploadsDir, unique);
+        fs.writeFileSync(filePath, buffer);
+        mirrorFile(unique);
+        const publicUrl = `/uploads/${unique}`;
+        try {
+          await db.query(
+            `INSERT INTO \`assets\` (\`id\`, \`storage_path\`, \`public_url\`, \`filename\`, \`mime_type\`, \`size_bytes\`)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [crypto.randomUUID(), `uploads/${unique}`, publicUrl, unique, `image/${m.mime}`, buffer.length]
+          );
+        } catch {}
+        resultStr = resultStr.split(m.full).join(publicUrl);
+      } catch {}
+    }
+    return resultStr;
+  }
+
+  if (Array.isArray(data)) {
+    const mapped = [];
+    for (const item of data) {
+      mapped.push(await dumpBase64Images(item));
+    }
+    return mapped;
+  }
+
+  if (typeof data === 'object') {
+    const copy: any = {};
+    for (const key of Object.keys(data)) {
+      copy[key] = await dumpBase64Images(data[key]);
+    }
+    return copy;
+  }
+
+  return data;
+}
+
+// Helper to format a question record for frontend consumption
+function formatQuestion(q: any, options: any[] = []) {
+  const content = parseJsonField(q.content, []);
+  const explanation = parseJsonField(q.explanation, []);
+
+  let diagramSvg: string | null = null;
+  let diagramUrl: string | null = null;
+
+  if (Array.isArray(content)) {
+    for (const blk of content) {
+      if (blk.diagramSvg || blk.svg) {
+        diagramSvg = blk.diagramSvg || blk.svg;
+      }
+      if (blk.type === 'diagram' && (blk.diagramSvg || blk.svg)) {
+        diagramSvg = blk.diagramSvg || blk.svg;
+      }
+      if (blk.type === 'image' && (blk.url || blk.src || blk.imageUrl)) {
+        diagramUrl = blk.url || blk.src || blk.imageUrl;
+      }
+      if (blk.diagramUrl || blk.imageUrl || blk.url) {
+        diagramUrl = blk.diagramUrl || blk.imageUrl || blk.url;
+      }
+    }
+  }
+
+  // Also check if raw_text contains an <img> tag if diagramUrl wasn't found in blocks
+  if (!diagramUrl && q.raw_text && /<img\s+/i.test(q.raw_text)) {
+    const match = q.raw_text.match(/src=["']([^"']+)["']/i);
+    if (match) diagramUrl = match[1];
+  }
+
+  const formattedOptions = (options || []).map((opt: any) => {
+    const optContent = parseJsonField(opt.content, []);
+    let textVal = opt.raw_text || '';
+    if (!textVal && Array.isArray(optContent)) {
+      textVal = optContent.map((c: any) => c.latex ? `\\(${c.latex}\\)` : (c.html || c.text || '')).join(' ');
+    }
+
+    // Extract option image from opt.imageUrl, opt.image_url, or optContent blocks
+    let optImageUrl = opt.imageUrl || opt.image_url || undefined;
+    if (!optImageUrl && Array.isArray(optContent)) {
+      const imgBlock = optContent.find((b: any) => b.type === 'image' || b.imageUrl || b.url || b.src);
+      if (imgBlock) optImageUrl = imgBlock.imageUrl || imgBlock.url || imgBlock.src;
+    }
+    if (!optImageUrl && opt.raw_text && /<img\s+/i.test(opt.raw_text)) {
+      const m = opt.raw_text.match(/src=["']([^"']+)["']/i);
+      if (m) optImageUrl = m[1];
+    }
+
+    return {
+      id: opt.id,
+      key: opt.option_key ? String(opt.option_key).toUpperCase() : 'A',
+      option_key: opt.option_key ? String(opt.option_key).toLowerCase() : 'a',
+      content: optContent,
+      rawText: textVal,
+      imageUrl: optImageUrl,
+      image_url: optImageUrl,
+      isCorrect: String(q.correct_option || '').toLowerCase() === String(opt.option_key || '').toLowerCase()
+    };
+  });
+
+  return {
+    id: q.id,
+    questionCode: q.question_code,
+    question_code: q.question_code,
+    questionType: q.question_type || 'MCQ_SINGLE',
+    question_type: q.question_type || 'MCQ_SINGLE',
+    content,
+    explanation,
+    difficulty: q.difficulty || 'Medium',
+    marks: Number(q.marks) || 4,
+    negativeMarks: Number(q.negative_marks) || 1,
+    correctAnswer: String(q.correct_option || 'a').toUpperCase(),
+    correctOption: String(q.correct_option || 'a').toLowerCase(),
+    correct_option: String(q.correct_option || 'a').toLowerCase(),
+    optionLayout: q.option_layout || 'grid_2x2',
+    year: q.year,
+    source: q.source,
+    rawText: q.raw_text || '',
+    diagramSvg: diagramSvg || undefined,
+    diagramUrl: diagramUrl || undefined,
+    imageUrl: diagramUrl || undefined,
+    subject: q.subject_name || 'General',
+    subject_name: q.subject_name || 'General',
+    subjectId: q.subject_id,
+    subject_id: q.subject_id,
+    chapter: q.chapter_title || 'General',
+    chapter_name: q.chapter_title || 'General',
+    chapterId: q.chapter_id,
+    chapter_id: q.chapter_id,
+    options: formattedOptions,
+    createdAt: q.created_at,
+    updatedAt: q.updated_at
+  };
+}
+
+// GET /api/questions - Full question list with options from MySQL
 questionsRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { subject, chapter, difficulty, search } = req.query;
 
-    let query = supabase
-      .from('questions')
-      .select('*, subjects(name), chapters(title), question_options(*)');
+    let sql = `
+      SELECT 
+        q.*,
+        s.name AS subject_name,
+        c.title AS chapter_title
+      FROM \`questions\` q
+      LEFT JOIN \`subjects\` s ON q.subject_id = s.id
+      LEFT JOIN \`chapters\` c ON q.chapter_id = c.id
+      WHERE 1=1
+    `;
+    const params: any[] = [];
+
+    if (subject && subject !== 'all' && subject !== 'All') {
+      sql += ' AND (LOWER(s.name) = LOWER(?) OR LOWER(s.code) = LOWER(?) OR q.subject_id = ?)';
+      params.push(subject, subject, subject);
+    }
+
+    if (chapter && chapter !== 'all' && chapter !== 'All') {
+      sql += ' AND (LOWER(c.title) = LOWER(?) OR LOWER(c.chapter_code) = LOWER(?) OR q.chapter_id = ?)';
+      params.push(chapter, chapter, chapter);
+    }
 
     if (difficulty && difficulty !== 'all') {
-      query = query.eq('difficulty', difficulty as string);
+      sql += ' AND q.difficulty = ?';
+      params.push(difficulty);
     }
 
     if (search) {
-      query = query.ilike('raw_text', `%${search}%`);
+      sql += ' AND (q.raw_text LIKE ? OR q.question_code LIKE ?)';
+      params.push(`%${search}%`, `%${search}%`);
     }
 
-    let { data, error } = await query;
+    sql += ' ORDER BY q.created_at DESC';
 
-    if (error || !data || data.length === 0) {
-      // Resilient fallback: Query questions directly without schema cache joins
-      try {
-        let rawQuery = supabase.from('questions').select('*');
-        if (difficulty && difficulty !== 'all') {
-          rawQuery = rawQuery.eq('difficulty', difficulty as string);
-        }
-        if (search) {
-          rawQuery = rawQuery.ilike('raw_text', `%${search}%`);
-        }
-        const { data: rawQuestions } = await rawQuery;
-        if (rawQuestions && rawQuestions.length > 0) {
-          const { data: rawOptions } = await supabase.from('question_options').select('*');
-          data = rawQuestions.map((q: any) => ({
-            ...q,
-            question_options: (rawOptions || []).filter((opt: any) => opt.question_id === q.id)
-          }));
-        }
-      } catch (fallbackErr) {
-        console.warn('Fallback questions query warning:', fallbackErr);
-      }
+    const [questions]: any = await db.query(sql, params);
+    if (!questions || questions.length === 0) {
+      return res.json({ success: true, data: [] });
     }
 
-    let formattedList = (data || []).map((q: any) => {
-      let diagramSvg: string | null = null;
-      let diagramUrl: string | null = null;
+    // Fetch all options for these questions
+    const [allOptions]: any = await db.query('SELECT * FROM `question_options` ORDER BY `sort_order` ASC');
 
-      if (Array.isArray(q.content)) {
-        for (const blk of q.content) {
-          if (blk.diagramSvg || blk.svg) {
-            diagramSvg = blk.diagramSvg || blk.svg;
-          }
-          if (blk.type === 'diagram' && (blk.diagramSvg || blk.svg)) {
-            diagramSvg = blk.diagramSvg || blk.svg;
-          }
-          if (blk.type === 'image' && (blk.url || blk.src)) {
-            diagramUrl = blk.url || blk.src;
-          }
-          if (blk.diagramUrl || blk.imageUrl || blk.url) {
-            diagramUrl = blk.diagramUrl || blk.imageUrl || blk.url;
-          }
-        }
-      }
+    const optionsByQid = new Map<string, any[]>();
+    for (const opt of allOptions || []) {
+      const qId = String(opt.question_id);
+      if (!optionsByQid.has(qId)) optionsByQid.set(qId, []);
+      optionsByQid.get(qId)!.push(opt);
+    }
 
-      const options = (q.question_options || []).map((opt: any) => {
-        let textVal = opt.raw_text || '';
-        if (!textVal && Array.isArray(opt.content)) {
-          textVal = opt.content.map((c: any) => c.latex ? `\\(${c.latex}\\)` : (c.html || c.text || '')).join(' ');
-        }
-        return {
-          id: opt.id,
-          key: opt.option_key ? opt.option_key.toUpperCase() : 'A',
-          option_key: opt.option_key || 'a',
-          content: opt.content || [],
-          rawText: textVal,
-          isCorrect: (q.correct_option || '').toLowerCase() === (opt.option_key || '').toLowerCase()
-        };
-      });
-
-      return {
-        id: q.id,
-        questionCode: q.question_code,
-        question_code: q.question_code,
-        questionType: q.question_type || 'MCQ_SINGLE',
-        question_type: q.question_type || 'MCQ_SINGLE',
-        content: q.content || [],
-        explanation: q.explanation || [],
-        difficulty: q.difficulty || 'Medium',
-        marks: Number(q.marks) || 1,
-        negativeMarks: Number(q.negative_marks) || 0,
-        correctAnswer: (q.correct_option || 'a').toUpperCase(),
-        correctOption: (q.correct_option || 'a').toLowerCase(),
-        correct_option: (q.correct_option || 'a').toLowerCase(),
-        optionLayout: q.option_layout || 'grid_2x2',
-        year: q.year,
-        source: q.source,
-        rawText: q.raw_text || '',
-        diagramSvg: diagramSvg || undefined,
-        diagramUrl: diagramUrl || undefined,
-        imageUrl: diagramUrl || undefined,
-        subject: q.subjects?.name || 'General',
-        subject_name: q.subjects?.name || 'General',
-        subjectId: q.subject_id,
-        subject_id: q.subject_id,
-        chapter: q.chapters?.title || 'General',
-        chapter_name: q.chapters?.title || 'General',
-        chapterId: q.chapter_id,
-        chapter_id: q.chapter_id,
-        options,
-        createdAt: q.created_at,
-        updatedAt: q.updated_at
-      };
-    });
+    let formattedList = questions.map((q: any) =>
+      formatQuestion(q, optionsByQid.get(String(q.id)) || [])
+    );
 
     if (subject && subject !== 'all') {
       const subStr = String(subject).toLowerCase();
@@ -142,659 +279,210 @@ questionsRouter.get('/', async (req: Request, res: Response, next: NextFunction)
   }
 });
 
-// GET /api/questions/:id - Full Question detail
+// GET /api/questions/:id - Single question detail
 questionsRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
 
-    const { data: q, error } = await supabase
-      .from('questions')
-      .select('*, subjects(name), chapters(title), question_options(*)')
-      .eq('id', id)
-      .single();
-
-    if (error || !q) {
-      return res.status(404).json({
-        success: false,
-        error: { code: 'QUESTION_NOT_FOUND', message: 'Question not found' }
-      });
-    }
-
-    let diagramSvg: string | null = null;
-    let diagramUrl: string | null = null;
-
-    if (Array.isArray(q.content)) {
-      for (const blk of q.content) {
-        if (blk.diagramSvg || blk.svg) {
-          diagramSvg = blk.diagramSvg || blk.svg;
-        }
-        if (blk.type === 'diagram' && (blk.diagramSvg || blk.svg)) {
-          diagramSvg = blk.diagramSvg || blk.svg;
-        }
-        if (blk.type === 'image' && (blk.url || blk.src)) {
-          diagramUrl = blk.url || blk.src;
-        }
-        if (blk.diagramUrl || blk.imageUrl || blk.url) {
-          diagramUrl = blk.diagramUrl || blk.imageUrl || blk.url;
-        }
-      }
-    }
-
-    const options = (q.question_options || []).map((opt: any) => {
-      let textVal = opt.raw_text || '';
-      if (!textVal && Array.isArray(opt.content)) {
-        textVal = opt.content.map((c: any) => c.latex ? `\\(${c.latex}\\)` : (c.html || c.text || '')).join(' ');
-      }
-      return {
-        id: opt.id,
-        key: opt.option_key ? opt.option_key.toUpperCase() : 'A',
-        option_key: opt.option_key || 'a',
-        rawText: textVal,
-        content: opt.content || [],
-        isCorrect: (q.correct_option || '').toLowerCase() === (opt.option_key || '').toLowerCase()
-      };
-    });
-
-    const fullQuestion = {
-      id: q.id,
-      questionCode: q.question_code,
-      question_code: q.question_code,
-      questionType: q.question_type || 'MCQ_SINGLE',
-      question_type: q.question_type || 'MCQ_SINGLE',
-      content: q.content || [],
-      explanation: q.explanation || [],
-      explanationText: typeof q.explanation === 'string' ? q.explanation : (Array.isArray(q.explanation) ? q.explanation.map((e: any) => e.text || e.html || '').join(' ') : ''),
-      difficulty: q.difficulty || 'Medium',
-      marks: Number(q.marks) || 1,
-      negativeMarks: Number(q.negative_marks) || 0,
-      correctAnswer: (q.correct_option || 'a').toUpperCase(),
-      correctOption: (q.correct_option || 'a').toLowerCase(),
-      correct_option: (q.correct_option || 'a').toLowerCase(),
-      optionLayout: q.option_layout || 'grid_2x2',
-      year: q.year,
-      source: q.source,
-      rawText: q.raw_text || (Array.isArray(q.content) ? q.content.map((b: any) => b.text || b.html || '').join(' ') : ''),
-      diagramSvg: diagramSvg || undefined,
-      diagramUrl: diagramUrl || undefined,
-      imageUrl: diagramUrl || undefined,
-      subject: q.subjects?.name || 'General',
-      chapter: q.chapters?.title || 'General',
-      options,
-      createdAt: q.created_at,
-      updatedAt: q.updated_at
-    };
-
-    res.json({ success: true, data: fullQuestion });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// Helper to resolve or auto-create subject_id and chapter_id in Supabase
-async function resolveSubjectAndChapter(subjectName?: string, chapterTitle?: string, directSubjectId?: string, directChapterId?: string) {
-  let subject_id: string | null = null;
-  let chapter_id: string | null = null;
-
-  // 1. Check direct UUIDs if provided
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (directSubjectId && uuidRegex.test(String(directSubjectId).trim())) {
-    subject_id = String(directSubjectId).trim();
-  }
-  if (directChapterId && uuidRegex.test(String(directChapterId).trim())) {
-    chapter_id = String(directChapterId).trim();
-  }
-
-  // 2. Fetch all subjects for clean, safe in-memory matching
-  const { data: allSubjects } = await supabase.from('subjects').select('id, name, code');
-  if (subjectName && !subject_id) {
-    const sTrim = String(subjectName).trim();
-    const sLower = sTrim.toLowerCase();
-
-    if (uuidRegex.test(sTrim)) {
-      subject_id = sTrim;
-    } else if (Array.isArray(allSubjects)) {
-      const matchedSub = allSubjects.find(s =>
-        s.id === sTrim ||
-        (s.name || '').trim().toLowerCase() === sLower ||
-        (s.code || '').trim().toLowerCase() === sLower ||
-        sLower.includes((s.name || '').trim().toLowerCase()) ||
-        (s.name || '').trim().toLowerCase().includes(sLower)
-      );
-
-      if (matchedSub) {
-        subject_id = matchedSub.id;
-      } else {
-        const code = sTrim.substring(0, 3).toUpperCase();
-        const { data: newSub } = await supabase
-          .from('subjects')
-          .insert({ name: sTrim, code, color: 'bg-teal-50 text-teal-700 border-teal-200' })
-          .select('id')
-          .maybeSingle();
-        if (newSub?.id) subject_id = newSub.id;
-      }
-    }
-  }
-
-  // 3. Match or resolve chapter safely without PostgREST .or() comma-breaking bugs
-  if (chapterTitle && !chapter_id) {
-    const cTrim = String(chapterTitle).trim();
-    const cLower = cTrim.toLowerCase();
-    const cClean = cLower.replace(/[^a-z0-9]/g, '');
-
-    if (uuidRegex.test(cTrim)) {
-      chapter_id = cTrim;
-    } else {
-      let chQuery = supabase.from('chapters').select('id, title, chapter_code, subject_id');
-      if (subject_id) {
-        chQuery = chQuery.eq('subject_id', subject_id);
-      }
-      const { data: chaptersList } = await chQuery;
-
-      if (Array.isArray(chaptersList) && chaptersList.length > 0) {
-        const matched = chaptersList.find(c => {
-          if (c.id === cTrim) return true;
-          const tLower = (c.title || '').trim().toLowerCase();
-          const codeLower = (c.chapter_code || '').trim().toLowerCase();
-          if (tLower === cLower || codeLower === cLower) return true;
-          const tClean = tLower.replace(/[^a-z0-9]/g, '');
-          if (tClean && cClean && tClean === cClean) return true;
-          return false;
-        });
-
-        if (matched) {
-          chapter_id = matched.id;
-          if (!subject_id && matched.subject_id) subject_id = matched.subject_id;
-        }
-      }
-
-      // If still not matched, check across all chapters
-      if (!chapter_id) {
-        const { data: allChs } = await supabase.from('chapters').select('id, title, chapter_code, subject_id');
-        if (Array.isArray(allChs)) {
-          const matched = allChs.find(c => {
-            if (c.id === cTrim) return true;
-            const tLower = (c.title || '').trim().toLowerCase();
-            const codeLower = (c.chapter_code || '').trim().toLowerCase();
-            if (tLower === cLower || codeLower === cLower) return true;
-            const tClean = tLower.replace(/[^a-z0-9]/g, '');
-            if (tClean && cClean && tClean === cClean) return true;
-            return false;
-          });
-
-          if (matched) {
-            chapter_id = matched.id;
-            if (!subject_id && matched.subject_id) subject_id = matched.subject_id;
-          }
-        }
-      }
-
-      // Only insert a brand new chapter if it truly does not exist in any format
-      if (!chapter_id && subject_id) {
-        const { data: newCh } = await supabase
-          .from('chapters')
-          .insert({
-            subject_id,
-            chapter_code: `CH-${Date.now().toString().slice(-4)}`,
-            title: cTrim
-          })
-          .select('id')
-          .maybeSingle();
-        if (newCh?.id) chapter_id = newCh.id;
-      }
-    }
-  }
-
-  return { subject_id, chapter_id };
-}
-
-// Helper to insert options into Supabase with automatic schema fallback
-async function saveQuestionOptions(questionId: string, options: any[]) {
-  if (!Array.isArray(options) || options.length === 0) return;
-
-  const formattedOpts = options.map((opt: any, idx: number) => {
-    let rawVal = opt.rawText || '';
-    if (!rawVal && Array.isArray(opt.content)) {
-      rawVal = opt.content.map((c: any) => c.latex ? `\\(${c.latex}\\)` : (c.html || c.text || '')).join(' ');
-    } else if (!rawVal && typeof opt.content === 'string') {
-      rawVal = opt.content;
-    }
-
-    const contentBlocks = Array.isArray(opt.content) && opt.content.length > 0
-      ? opt.content
-      : [{ type: 'text', html: rawVal || '' }];
-
-    return {
-      question_id: questionId,
-      option_key: (opt.key || String.fromCharCode(97 + idx)).toLowerCase(),
-      content: contentBlocks,
-      raw_text: rawVal,
-      sort_order: idx + 1
-    };
-  });
-
-  // Try inserting with raw_text
-  const { error } = await supabase.from('question_options').insert(formattedOpts);
-  if (error) {
-    console.warn('Initial option insert failed, falling back to content-only insert:', error.message);
-    const contentOnlyOpts = formattedOpts.map(({ raw_text, ...rest }) => rest);
-    const { error: fallbackErr } = await supabase.from('question_options').insert(contentOnlyOpts);
-    if (fallbackErr) {
-      console.error('Failed inserting question options fallback:', fallbackErr);
-    }
-  }
-}
-
-const BUCKET_NAME = process.env.VITE_SUPABASE_STORAGE_BUCKET || 'question-assets';
-
-// Helper to upload base64 images directly into Supabase Storage
-async function uploadBase64ToStorage(base64Str: string, subject?: string, name?: string): Promise<{ publicUrl: string; storagePath: string } | null> {
-  if (!base64Str || !base64Str.startsWith('data:image/')) return null;
-  try {
-    const matches = base64Str.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
-    if (!matches) return null;
-    const mimeType = matches[1] || 'image/png';
-    const buffer = Buffer.from(matches[2], 'base64');
-    const ext = mimeType.split('/')[1] || 'png';
-    const folder = (subject || 'general').toLowerCase().trim().replace(/[^a-z0-9_-]/g, '_') || 'general';
-    const fileName = `q_${Date.now()}_${Math.random().toString(36).substring(2, 7)}.${ext}`;
-    const storagePath = `${folder}/${fileName}`;
-
-    const { data: storageData, error: storageError } = await supabase.storage
-      .from(BUCKET_NAME)
-      .upload(storagePath, buffer, { contentType: mimeType, upsert: true });
-
-    if (!storageError && storageData) {
-      const { data: urlData } = supabase.storage.from(BUCKET_NAME).getPublicUrl(storagePath);
-      const publicUrl = urlData.publicUrl;
-
-      // Insert into assets table
-      try {
-        await supabase.from('assets').insert({
-          storage_path: storagePath,
-          public_url: publicUrl,
-          filename: name || fileName,
-          mime_type: mimeType,
-          size_bytes: buffer.length
-        });
-      } catch (assetErr) {
-        console.warn('[uploadBase64ToStorage] assets insert notice:', assetErr);
-      }
-
-      return { publicUrl, storagePath };
-    }
-  } catch (err) {
-    console.warn('[uploadBase64ToStorage] error:', err);
-  }
-  return null;
-}
-
-// Helper to scan and convert any base64 images into permanent Supabase storage public URLs before saving
-async function processAndUploadQuestionImages(body: any): Promise<any> {
-  const processed = { ...body };
-  const sub = processed.subject || processed.subject_name || 'general';
-
-  // 1. Process imageUrl
-  if (processed.imageUrl && processed.imageUrl.startsWith('data:image/')) {
-    const res = await uploadBase64ToStorage(processed.imageUrl, sub, `Question ${processed.questionCode || 'Asset'} Image`);
-    if (res?.publicUrl) {
-      processed.imageUrl = res.publicUrl;
-      processed.diagramUrl = res.publicUrl;
-    }
-  }
-
-  // 2. Process diagramUrl
-  if (processed.diagramUrl && processed.diagramUrl.startsWith('data:image/')) {
-    const res = await uploadBase64ToStorage(processed.diagramUrl, sub, `Question ${processed.questionCode || 'Asset'} Diagram`);
-    if (res?.publicUrl) {
-      processed.diagramUrl = res.publicUrl;
-      if (!processed.imageUrl) processed.imageUrl = res.publicUrl;
-    }
-  }
-
-  // 3. Process rawText for <img src="data:image/...">
-  if (typeof processed.rawText === 'string' && processed.rawText.includes('data:image/')) {
-    const matches = processed.rawText.match(/<img[^>]*src=["'](data:image\/[^"']+)["']/gi);
-    if (matches) {
-      for (const m of matches) {
-        const srcMatch = m.match(/src=["'](data:image\/[^"']+)["']/i);
-        if (srcMatch && srcMatch[1]) {
-          const res = await uploadBase64ToStorage(srcMatch[1], sub, `Statement Image`);
-          if (res?.publicUrl) {
-            processed.rawText = processed.rawText.replace(srcMatch[1], res.publicUrl);
-          }
-        }
-      }
-    }
-  }
-
-  // 4. Process content blocks
-  if (Array.isArray(processed.content)) {
-    const newContent = [];
-    for (const b of processed.content) {
-      const bCopy = { ...b };
-      const u = bCopy.url || bCopy.imageUrl || bCopy.src;
-      if (u && u.startsWith('data:image/')) {
-        const res = await uploadBase64ToStorage(u, sub, `Block Image`);
-        if (res?.publicUrl) {
-          bCopy.url = res.publicUrl;
-          bCopy.imageUrl = res.publicUrl;
-          if (bCopy.src) bCopy.src = res.publicUrl;
-        }
-      }
-      if (typeof bCopy.html === 'string' && bCopy.html.includes('data:image/')) {
-        const matches = bCopy.html.match(/<img[^>]*src=["'](data:image\/[^"']+)["']/gi);
-        if (matches) {
-          for (const m of matches) {
-            const srcMatch = m.match(/src=["'](data:image\/[^"']+)["']/i);
-            if (srcMatch && srcMatch[1]) {
-              const res = await uploadBase64ToStorage(srcMatch[1], sub, `Block HTML Image`);
-              if (res?.publicUrl) {
-                bCopy.html = bCopy.html.replace(srcMatch[1], res.publicUrl);
-              }
-            }
-          }
-        }
-      }
-      newContent.push(bCopy);
-    }
-    processed.content = newContent;
-  }
-
-  // 5. Process options
-  if (Array.isArray(processed.options)) {
-    const newOpts = [];
-    for (let i = 0; i < processed.options.length; i++) {
-      const opt = { ...processed.options[i] };
-      if (opt.imageUrl && opt.imageUrl.startsWith('data:image/')) {
-        const res = await uploadBase64ToStorage(opt.imageUrl, sub, `Option ${opt.key || String.fromCharCode(65 + i)} Image`);
-        if (res?.publicUrl) {
-          opt.imageUrl = res.publicUrl;
-        }
-      }
-      if (typeof opt.rawText === 'string' && opt.rawText.includes('data:image/')) {
-        const matches = opt.rawText.match(/<img[^>]*src=["'](data:image\/[^"']+)["']/gi);
-        if (matches) {
-          for (const m of matches) {
-            const srcMatch = m.match(/src=["'](data:image\/[^"']+)["']/i);
-            if (srcMatch && srcMatch[1]) {
-              const res = await uploadBase64ToStorage(srcMatch[1], sub, `Option ${opt.key || String.fromCharCode(65 + i)} Image`);
-              if (res?.publicUrl) {
-                opt.rawText = opt.rawText.replace(srcMatch[1], res.publicUrl);
-              }
-            }
-          }
-        }
-      }
-      newOpts.push(opt);
-    }
-    processed.options = newOpts;
-  }
-
-  return processed;
-}
-
-// Helper to automatically register attached images into the assets media library
-async function syncQuestionImagesToAssets(questionId: string, body: any) {
-  try {
-    const urls: Array<{ url: string; name?: string }> = [];
-
-    if (body.imageUrl && (body.imageUrl.startsWith('http') || body.imageUrl.startsWith('data:'))) {
-      urls.push({ url: body.imageUrl, name: `Question ${body.questionCode || questionId} Image` });
-    }
-    if (body.diagramUrl && (body.diagramUrl.startsWith('http') || body.diagramUrl.startsWith('data:'))) {
-      urls.push({ url: body.diagramUrl, name: `Question ${body.questionCode || questionId} Diagram` });
-    }
-
-    // Extract images from rawText e.g. <img src="...">
-    if (typeof body.rawText === 'string') {
-      const matches = body.rawText.match(/<img[^>]*src=["']([^"']+)["']/gi);
-      if (matches) {
-        matches.forEach((m: string) => {
-          const srcMatch = m.match(/src=["']([^"']+)["']/i);
-          if (srcMatch && (srcMatch[1].startsWith('http') || srcMatch[1].startsWith('data:'))) {
-            urls.push({ url: srcMatch[1], name: `Question ${body.questionCode || questionId} Statement Image` });
-          }
-        });
-      }
-    }
-
-    // Extract from content blocks
-    if (Array.isArray(body.content)) {
-      body.content.forEach((b: any) => {
-        const u = b.url || b.imageUrl || b.src;
-        if (u && (u.startsWith('http') || u.startsWith('data:'))) {
-          urls.push({ url: u, name: `Question ${body.questionCode || questionId} Block Image` });
-        }
-      });
-    }
-
-    // Extract from options
-    if (Array.isArray(body.options)) {
-      body.options.forEach((o: any, idx: number) => {
-        const u = o.imageUrl;
-        if (u && (u.startsWith('http') || u.startsWith('data:'))) {
-          urls.push({ url: u, name: `Option ${o.key || String.fromCharCode(65 + idx)} Image` });
-        }
-        if (typeof o.rawText === 'string') {
-          const matches = o.rawText.match(/<img[^>]*src=["']([^"']+)["']/gi);
-          if (matches) {
-            matches.forEach((m: string) => {
-              const srcMatch = m.match(/src=["']([^"']+)["']/i);
-              if (srcMatch && (srcMatch[1].startsWith('http') || srcMatch[1].startsWith('data:'))) {
-                urls.push({ url: srcMatch[1], name: `Option ${o.key || String.fromCharCode(65 + idx)} Image` });
-              }
-            });
-          }
-        }
-      });
-    }
-
-    const uniqueUrls = urls.filter((item, index, self) => index === self.findIndex(t => t.url === item.url));
-
-    for (const item of uniqueUrls) {
-      if (item.url.startsWith('data:image/')) {
-        await uploadBase64ToStorage(item.url, body.subject, item.name);
-      } else {
-        const { data: existing } = await supabase.from('assets').select('id').eq('public_url', item.url).maybeSingle();
-        if (!existing) {
-          const subjectFolder = (body.subject || 'general').toLowerCase().trim();
-          await supabase.from('assets').insert({
-            storage_path: `${subjectFolder}/q_${questionId}_${Date.now()}.png`,
-            public_url: item.url,
-            filename: item.name || `question_asset_${Date.now()}`,
-            mime_type: 'image/png',
-            size_bytes: item.url.length
-          });
-        }
-      }
-    }
-  } catch (err) {
-    console.warn('Failed syncing question images to assets table:', err);
-  }
-}
-
-// POST /api/questions - Create Question
-questionsRouter.post('/', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const rawBody = req.body;
-    const body = await processAndUploadQuestionImages(rawBody);
-    const { subject_id, chapter_id } = await resolveSubjectAndChapter(
-      body.subject || body.subject_name,
-      body.chapter || body.chapter_name,
-      body.subjectId || body.subject_id,
-      body.chapterId || body.chapter_id
+    const [rows]: any = await db.query(
+      `SELECT q.*, s.name AS subject_name, c.title AS chapter_title 
+       FROM \`questions\` q
+       LEFT JOIN \`subjects\` s ON q.subject_id = s.id
+       LEFT JOIN \`chapters\` c ON q.chapter_id = c.id
+       WHERE q.id = ? OR q.question_code = ?
+       LIMIT 1`,
+      [id, id]
     );
 
-    let questionCode = body.questionCode;
-    if (!questionCode || questionCode.startsWith('Q-') || questionCode === 'undefined') {
-      const sub = (body.subject || 'BIO').trim().toLowerCase();
-      let sCode = 'BIO';
-      if (sub.includes('phys')) sCode = 'PHY';
-      else if (sub.includes('chem')) sCode = 'CHE';
-      else if (sub.includes('math')) sCode = 'MAT';
-      else sCode = (body.subject || 'GEN').replace(/[^a-zA-Z]/g, '').substring(0, 3).toUpperCase() || 'GEN';
-
-      const chClean = (body.chapter || 'GEN').replace(/[^a-zA-Z]/g, '').substring(0, 3).toUpperCase() || 'GEN';
-      const num = String(Math.floor(Math.random() * 9000) + 1000);
-      questionCode = `${sCode}-${chClean.padEnd(3, 'X')}-${num}`;
-    }
-    const rawText = body.rawText || (Array.isArray(body.content) ? body.content.map((b: any) => b.text || b.html || '').join(' ') : '');
-
-    // Duplicate question verification:
-    // Check if a question with the identical statement already exists in the chapter/subject
-    const cleanRaw = rawText.replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
-    if (cleanRaw.length > 5) {
-      let dupQuery = supabase
-        .from('questions')
-        .select('id, question_code, raw_text');
-
-      if (chapter_id) {
-        dupQuery = dupQuery.eq('chapter_id', chapter_id);
-      } else if (subject_id) {
-        dupQuery = dupQuery.eq('subject_id', subject_id);
-      }
-
-      const { data: existingList } = await dupQuery.limit(500);
-
-      const exactDup = (existingList || []).find((eq: any) => {
-        const eqClean = (eq.raw_text || '').replace(/<[^>]*>?/gm, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
-        return eqClean === cleanRaw;
-      });
-
-      if (exactDup) {
-        return res.status(409).json({
-          success: false,
-          error: `Duplicate question detected! This question already exists in the question bank under code "${exactDup.question_code}". Duplicate questions are not allowed.`,
-          code: 'DUPLICATE_QUESTION',
-          existingCode: exactDup.question_code
-        });
-      }
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Question not found' });
     }
 
-    let contentToSave = Array.isArray(body.content) ? [...body.content] : (Array.isArray(body.blocks) ? [...body.blocks] : []);
-    if (body.diagramSvg && !contentToSave.some((b: any) => b.type === 'diagram' || b.diagramSvg || b.svg)) {
-      contentToSave.push({ type: 'diagram', diagramSvg: body.diagramSvg, svg: body.diagramSvg });
-    }
-    if (body.imageUrl && !contentToSave.some((b: any) => b.type === 'image' || b.url || b.imageUrl)) {
-      contentToSave.push({ type: 'image', url: body.imageUrl, imageUrl: body.imageUrl });
-    }
+    const q = rows[0];
+    const [options]: any = await db.query(
+      'SELECT * FROM `question_options` WHERE `question_id` = ? ORDER BY `sort_order` ASC',
+      [q.id]
+    );
 
-    const insertPayload: any = {
-      question_code: questionCode,
-      subject_id,
-      chapter_id,
-      question_type: body.questionType || 'MCQ_SINGLE',
-      content: contentToSave,
-      explanation: body.explanation || body.explanationText || [],
-      difficulty: body.difficulty || 'Medium',
-      marks: body.marks || 1,
-      negative_marks: body.negativeMarks || 0,
-      correct_option: (body.correctAnswer || 'a').toLowerCase(),
-      option_layout: body.optionLayout || 'grid_2x2',
-      raw_text: rawText,
-      year: body.year || null,
-      source: body.source || null,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-
-    // Only pass id if it is a valid UUID
-    if (body.id && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(body.id)) {
-      insertPayload.id = body.id;
-    }
-
-    const { data: newQ, error } = await supabase
-      .from('questions')
-      .insert(insertPayload)
-      .select('id')
-      .single();
-
-    if (error) {
-      console.error('Supabase create question insert error:', error);
-      throw error;
-    }
-
-    // Save options if present
-    if (Array.isArray(body.options) && body.options.length > 0) {
-      await saveQuestionOptions(newQ.id, body.options);
-    }
-
-    // Auto-sync images into media library
-    syncQuestionImagesToAssets(newQ.id, body).catch(() => {});
-
-    res.status(201).json({ success: true, data: { ...body, id: newQ.id, questionCode } });
+    res.json({ success: true, data: formatQuestion(q, options || []) });
   } catch (err) {
-    console.error('Create question route error:', err);
     next(err);
   }
 });
 
-// PUT /api/questions/:id - Update Question
+// POST /api/questions - Create new question in MySQL
+questionsRouter.post('/', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const body = await dumpBase64Images(req.body);
+    const newId = body.id || crypto.randomUUID();
+    const qCode = body.questionCode || body.question_code || `Q-${Date.now().toString().slice(-6)}`;
+
+    // Resolve subject & chapter IDs
+    let subjectId = body.subjectId || body.subject_id || null;
+    let chapterId = body.chapterId || body.chapter_id || null;
+
+    if (!subjectId && body.subject) {
+      const [s]: any = await db.query('SELECT `id` FROM `subjects` WHERE LOWER(`name`) = LOWER(?) LIMIT 1', [body.subject]);
+      if (s && s.length > 0) subjectId = s[0].id;
+    }
+
+    if (!chapterId && body.chapter) {
+      const [c]: any = await db.query('SELECT `id` FROM `chapters` WHERE LOWER(`title`) = LOWER(?) LIMIT 1', [body.chapter]);
+      if (c && c.length > 0) chapterId = c[0].id;
+    }
+
+    const contentJson = JSON.stringify(body.content || []);
+    const explanationJson = JSON.stringify(body.explanation || []);
+    const difficulty = body.difficulty || 'Medium';
+    const marks = Number(body.marks) || 4;
+    const negMarks = Number(body.negativeMarks ?? body.negative_marks ?? 1);
+    const correctOption = (body.correctOption || body.correct_option || body.correctAnswer || 'a').toLowerCase();
+    const optionLayout = body.optionLayout || body.option_layout || 'grid_2x2';
+    const year = body.year || 2024;
+    const source = body.source || 'Question Bank';
+    const rawText = body.rawText || body.raw_text || '';
+
+    await db.query(
+      `INSERT INTO \`questions\` 
+       (\`id\`, \`question_code\`, \`subject_id\`, \`chapter_id\`, \`question_type\`, \`content\`, \`explanation\`, \`difficulty\`, \`marks\`, \`negative_marks\`, \`correct_option\`, \`option_layout\`, \`year\`, \`source\`, \`raw_text\`)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [newId, qCode, subjectId, chapterId, body.questionType || 'MCQ', contentJson, explanationJson, difficulty, marks, negMarks, correctOption, optionLayout, year, source, rawText]
+    );
+
+    // Insert options
+    if (Array.isArray(body.options)) {
+      for (let i = 0; i < body.options.length; i++) {
+        const opt = body.options[i];
+        const optId = opt.id || crypto.randomUUID();
+        const optKey = (opt.key || opt.option_key || String.fromCharCode(97 + i)).toLowerCase();
+        let contentArr = opt.content || [];
+        if (!Array.isArray(contentArr)) contentArr = [contentArr];
+        const optImg = opt.imageUrl || opt.image_url;
+        if (optImg && !contentArr.some((c: any) => c.type === 'image')) {
+          contentArr.push({ type: 'image', url: optImg, src: optImg, imageUrl: optImg });
+        }
+        const optContent = JSON.stringify(contentArr);
+        const optRaw = opt.rawText || opt.raw_text || '';
+        await db.query(
+          `INSERT INTO \`question_options\` (\`id\`, \`question_id\`, \`option_key\`, \`content\`, \`raw_text\`, \`sort_order\`)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [optId, newId, optKey, optContent, optRaw, i + 1]
+        );
+      }
+    }
+
+    const [created]: any = await db.query(
+      `SELECT q.*, s.name AS subject_name, c.title AS chapter_title 
+       FROM \`questions\` q
+       LEFT JOIN \`subjects\` s ON q.subject_id = s.id
+       LEFT JOIN \`chapters\` c ON q.chapter_id = c.id
+       WHERE q.id = ?`,
+      [newId]
+    );
+
+    const [savedOpts]: any = await db.query(
+      'SELECT * FROM `question_options` WHERE `question_id` = ? ORDER BY `sort_order` ASC',
+      [newId]
+    );
+
+    res.status(201).json({ success: true, data: formatQuestion(created[0], savedOpts || []) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUT /api/questions/:id - Update existing question in MySQL
 questionsRouter.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const rawBody = req.body;
-    const body = await processAndUploadQuestionImages(rawBody);
-    const { subject_id, chapter_id } = await resolveSubjectAndChapter(
-      body.subject || body.subject_name,
-      body.chapter || body.chapter_name,
-      body.subjectId || body.subject_id,
-      body.chapterId || body.chapter_id
+    const body = await dumpBase64Images(req.body);
+
+    const [existing]: any = await db.query('SELECT * FROM `questions` WHERE `id` = ? LIMIT 1', [id]);
+    if (!existing || existing.length === 0) {
+      return res.status(404).json({ success: false, error: 'Question not found' });
+    }
+
+    const contentJson = body.content !== undefined ? JSON.stringify(body.content) : existing[0].content;
+    const explanationJson = body.explanation !== undefined ? JSON.stringify(body.explanation) : existing[0].explanation;
+    const correctOption = (body.correctOption || body.correct_option || body.correctAnswer || existing[0].correct_option || 'a').toLowerCase();
+
+    await db.query(
+      `UPDATE \`questions\` SET
+         \`content\` = ?,
+         \`explanation\` = ?,
+         \`difficulty\` = COALESCE(?, \`difficulty\`),
+         \`marks\` = COALESCE(?, \`marks\`),
+         \`negative_marks\` = COALESCE(?, \`negative_marks\`),
+         \`correct_option\` = ?,
+         \`option_layout\` = COALESCE(?, \`option_layout\`),
+         \`year\` = COALESCE(?, \`year\`),
+         \`source\` = COALESCE(?, \`source\`),
+         \`raw_text\` = COALESCE(?, \`raw_text\`),
+         \`updated_at\` = CURRENT_TIMESTAMP
+       WHERE \`id\` = ?`,
+      [
+        contentJson,
+        explanationJson,
+        body.difficulty,
+        body.marks,
+        body.negativeMarks ?? body.negative_marks,
+        correctOption,
+        body.optionLayout || body.option_layout,
+        body.year,
+        body.source,
+        body.rawText || body.raw_text,
+        id
+      ]
     );
 
-    let contentToUpdate = Array.isArray(body.content) ? [...body.content] : (Array.isArray(body.blocks) ? [...body.blocks] : undefined);
-    if (contentToUpdate) {
-      if (body.diagramSvg && !contentToUpdate.some((b: any) => b.type === 'diagram' || b.diagramSvg || b.svg)) {
-        contentToUpdate.push({ type: 'diagram', diagramSvg: body.diagramSvg, svg: body.diagramSvg });
-      }
-      if (body.imageUrl && !contentToUpdate.some((b: any) => b.type === 'image' || b.url || b.imageUrl)) {
-        contentToUpdate.push({ type: 'image', url: body.imageUrl, imageUrl: body.imageUrl });
+    // Update options if provided
+    if (Array.isArray(body.options)) {
+      await db.query('DELETE FROM `question_options` WHERE `question_id` = ?', [id]);
+      for (let i = 0; i < body.options.length; i++) {
+        const opt = body.options[i];
+        const optId = opt.id || crypto.randomUUID();
+        const optKey = (opt.key || opt.option_key || String.fromCharCode(97 + i)).toLowerCase();
+        let contentArr = opt.content || [];
+        if (!Array.isArray(contentArr)) contentArr = [contentArr];
+        const optImg = opt.imageUrl || opt.image_url;
+        if (optImg && !contentArr.some((c: any) => c.type === 'image')) {
+          contentArr.push({ type: 'image', url: optImg, src: optImg, imageUrl: optImg });
+        }
+        const optContent = JSON.stringify(contentArr);
+        const optRaw = opt.rawText || opt.raw_text || '';
+        await db.query(
+          `INSERT INTO \`question_options\` (\`id\`, \`question_id\`, \`option_key\`, \`content\`, \`raw_text\`, \`sort_order\`)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+          [optId, id, optKey, optContent, optRaw, i + 1]
+        );
       }
     }
 
-    const { error } = await supabase
-      .from('questions')
-      .update({
-        subject_id: subject_id || undefined,
-        chapter_id: chapter_id || undefined,
-        content: contentToUpdate,
-        explanation: body.explanation || body.explanationText,
-        difficulty: body.difficulty,
-        marks: body.marks,
-        negative_marks: body.negativeMarks,
-        correct_option: (body.correctAnswer || 'a').toLowerCase(),
-        option_layout: body.optionLayout,
-        raw_text: body.rawText,
-        source: body.source !== undefined ? body.source : undefined,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', id);
+    const [updated]: any = await db.query(
+      `SELECT q.*, s.name AS subject_name, c.title AS chapter_title 
+       FROM \`questions\` q
+       LEFT JOIN \`subjects\` s ON q.subject_id = s.id
+       LEFT JOIN \`chapters\` c ON q.chapter_id = c.id
+       WHERE q.id = ?`,
+      [id]
+    );
 
-    if (error) throw error;
+    const [savedOpts]: any = await db.query(
+      'SELECT * FROM `question_options` WHERE `question_id` = ? ORDER BY `sort_order` ASC',
+      [id]
+    );
 
-    if (Array.isArray(body.options) && body.options.length > 0) {
-      await supabase.from('question_options').delete().eq('question_id', String(id));
-      await saveQuestionOptions(String(id), body.options);
-    }
-
-    // Auto-sync images into media library
-    syncQuestionImagesToAssets(String(id), body).catch(() => {});
-
-    res.json({ success: true, data: { ...body, id } });
+    res.json({ success: true, data: formatQuestion(updated[0], savedOpts || []) });
   } catch (err) {
     next(err);
   }
 });
 
-// DELETE /api/questions/:id - Delete Question
+// DELETE /api/questions/:id
 questionsRouter.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-
-    await supabase.from('question_options').delete().eq('question_id', id);
-    const { error } = await supabase.from('questions').delete().eq('id', id);
-    if (error) throw error;
-
+    await db.query('DELETE FROM `questions` WHERE `id` = ?', [id]);
     res.json({ success: true, data: { id } });
   } catch (err) {
     next(err);

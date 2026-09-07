@@ -316,7 +316,7 @@ export const CreateQuestionPage: React.FC<CreateQuestionPageProps> = ({
   };
 
   const updateImageBlockUrl = (id: string, imageUrl: string) => {
-    setBlocks(prev => prev.map(b => (b.id === id ? { ...b, imageUrl } : b)));
+    setBlocks(prev => prev.map(b => (b.id === id ? { ...b, imageUrl, url: imageUrl, src: imageUrl } : b)));
   };
 
   const handleBlockImageUpload = async (blockId: string, e: React.ChangeEvent<HTMLInputElement>) => {
@@ -461,13 +461,18 @@ export const CreateQuestionPage: React.FC<CreateQuestionPageProps> = ({
       options: options.map((o, idx) => {
         const cleanedOptRaw = cleanHtmlTags(o.rawText || '');
         const optImgMatch = (o.rawText || '').match(/<img[^>]*src=["']([^"']+)["']/i);
-        const optImgUrl = optImgMatch ? optImgMatch[1] : (o.imageUrl || undefined);
+        const optImgUrl = optImgMatch ? optImgMatch[1] : (o.imageUrl || (o as any).image_url || undefined);
+        const optContent: any[] = [{ type: 'text', html: cleanedOptRaw }];
+        if (optImgUrl) {
+          optContent.push({ type: 'image', url: optImgUrl, src: optImgUrl, imageUrl: optImgUrl });
+        }
         return {
           ...o,
           key: o.key || String.fromCharCode(65 + idx),
           rawText: cleanedOptRaw,
           imageUrl: optImgUrl,
-          content: [{ type: 'text', html: cleanedOptRaw }]
+          image_url: optImgUrl,
+          content: optContent
         };
       }),
       correctAnswer: correctOpt?.key || 'A',
@@ -830,12 +835,22 @@ export const CreateQuestionPage: React.FC<CreateQuestionPageProps> = ({
                     <div className="py-4 text-center space-y-2 bg-slate-50 border border-slate-200 rounded-lg p-3">
                       <div className="max-h-52 w-full flex items-center justify-center scale-95" dangerouslySetInnerHTML={{ __html: b.diagramSvg }} />
                     </div>
-                  ) : b.imageUrl ? (
+                  ) : (b.imageUrl || (b as any).url || (b as any).src) ? (
                     <div className="py-4 text-center space-y-3 bg-slate-50 border border-slate-200 rounded-lg p-3">
                       <img
-                        src={resolveImageUrl(b.imageUrl)}
+                        src={resolveImageUrl(b.imageUrl || (b as any).url || (b as any).src)}
                         alt="Diagram"
                         className="max-h-52 mx-auto rounded-lg border border-slate-200 object-contain shadow-2xs bg-white p-1"
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          if (!target.dataset.triedFallback) {
+                            target.dataset.triedFallback = 'true';
+                            const cur = target.src;
+                            if (cur.includes('/uploads/') && !cur.includes('/api/uploads/')) {
+                              target.src = cur.replace('/uploads/', '/api/uploads/');
+                            }
+                          }
+                        }}
                       />
                       
                       <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
@@ -851,7 +866,7 @@ export const CreateQuestionPage: React.FC<CreateQuestionPageProps> = ({
                           onClick={() => {
                             setStudioModalState({
                               isOpen: true,
-                              imageSrc: resolveImageUrl(b.imageUrl!),
+                              imageSrc: resolveImageUrl(b.imageUrl || (b as any).url || (b as any).src || ''),
                               target: { type: 'block', id: b.id }
                             });
                           }}
@@ -989,13 +1004,23 @@ export const CreateQuestionPage: React.FC<CreateQuestionPageProps> = ({
                   placeholder={`Option (${opt.key?.toUpperCase() || String.fromCharCode(65 + idx)}) text or formula...`}
                 />
 
-                {opt.imageUrl && (
+                {(opt.imageUrl || (opt as any).image_url) && (
                   <div className="p-2 bg-white border border-slate-200 rounded-lg flex items-center justify-between gap-3 shadow-2xs">
                     <div className="flex items-center gap-3">
                       <img
-                        src={resolveImageUrl(opt.imageUrl)}
+                        src={resolveImageUrl(opt.imageUrl || (opt as any).image_url)}
                         alt={`Option ${opt.key}`}
                         className="max-h-20 max-w-[120px] object-contain rounded border border-slate-200 p-0.5"
+                        onError={(e) => {
+                          const target = e.currentTarget;
+                          if (!target.dataset.triedFallback) {
+                            target.dataset.triedFallback = 'true';
+                            const cur = target.src;
+                            if (cur.includes('/uploads/') && !cur.includes('/api/uploads/')) {
+                              target.src = cur.replace('/uploads/', '/api/uploads/');
+                            }
+                          }
+                        }}
                       />
                       <span className="text-xs text-slate-600 font-medium">Image attached to Option ({opt.key})</span>
                     </div>
@@ -1005,7 +1030,7 @@ export const CreateQuestionPage: React.FC<CreateQuestionPageProps> = ({
                         onClick={() => {
                           setStudioModalState({
                             isOpen: true,
-                            imageSrc: resolveImageUrl(opt.imageUrl!),
+                            imageSrc: resolveImageUrl(opt.imageUrl || (opt as any).image_url!),
                             target: { type: 'option', index: idx }
                           });
                         }}

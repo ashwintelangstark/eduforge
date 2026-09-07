@@ -107,7 +107,7 @@ export const QuestionBankPage: React.FC<QuestionBankPageProps> = ({
 
   // Filters
   const [search, setSearch] = useState('');
-  const [selectedSubject, setSelectedSubject] = useState<string>('all');
+  const [selectedSubject, setSelectedSubject] = useState<string>(user.role === 'faculty' && userSubject !== 'All' ? userSubject : 'all');
   const [selectedChapterFilter, setSelectedChapterFilter] = useState<string>('all');
   const [difficultyFilter, setDifficultyFilter] = useState<string>('all');
   const [imageFilter, setImageFilter] = useState<'all' | 'with_image' | 'without_image'>('all');
@@ -155,7 +155,7 @@ export const QuestionBankPage: React.FC<QuestionBankPageProps> = ({
 
   useEffect(() => {
     loadMetadataAndQuestions();
-  }, [difficultyFilter]);
+  }, [difficultyFilter, selectedSubject]);
 
   useEffect(() => {
     if (selectedChapter) {
@@ -180,6 +180,11 @@ export const QuestionBankPage: React.FC<QuestionBankPageProps> = ({
       const params: any = {};
       if (search) params.search = search;
       if (difficultyFilter !== 'all') params.difficulty = difficultyFilter;
+      if (user.role === 'faculty' && userSubject !== 'All') {
+        params.subject = userSubject;
+      } else if (selectedSubject !== 'all') {
+        params.subject = selectedSubject;
+      }
 
       const [qData, subData, chData] = await Promise.all([
         api.getQuestions(params, force),

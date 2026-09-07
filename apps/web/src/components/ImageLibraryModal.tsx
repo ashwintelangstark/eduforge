@@ -242,7 +242,16 @@ export const ImageLibraryModal: React.FC<ImageLibraryModalProps> = ({
                             alt={asset.name}
                             className="max-h-full max-w-full object-contain transition-transform duration-200 group-hover:scale-105"
                             onError={(e) => {
-                              (e.target as HTMLElement).style.opacity = '0.5';
+                              const target = e.currentTarget;
+                              if (!target.dataset.triedFallback) {
+                                target.dataset.triedFallback = 'true';
+                                const cur = target.src;
+                                if (cur.includes('/uploads/') && !cur.includes('/api/uploads/')) {
+                                  target.src = cur.replace('/uploads/', '/api/uploads/');
+                                  return;
+                                }
+                              }
+                              target.style.opacity = '0.5';
                             }}
                           />
                           {isSelected && (
@@ -371,7 +380,21 @@ export const ImageLibraryModal: React.FC<ImageLibraryModalProps> = ({
             >
               <X className="w-4 h-4" />
             </button>
-            <img src={lightboxUrl} alt="Preview" className="max-h-[75vh] max-w-full object-contain rounded-lg" />
+            <img
+              src={lightboxUrl}
+              alt="Preview"
+              className="max-h-[75vh] max-w-full object-contain rounded-lg"
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (!target.dataset.triedFallback) {
+                  target.dataset.triedFallback = 'true';
+                  const cur = target.src;
+                  if (cur.includes('/uploads/') && !cur.includes('/api/uploads/')) {
+                    target.src = cur.replace('/uploads/', '/api/uploads/');
+                  }
+                }
+              }}
+            />
             <div className="flex items-center gap-3">
               <button
                 type="button"

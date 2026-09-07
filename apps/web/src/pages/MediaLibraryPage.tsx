@@ -207,7 +207,7 @@ export const MediaLibraryPage: React.FC = () => {
           </div>
           <h3 className="text-sm font-bold text-slate-700">No media assets found</h3>
           <p className="text-xs text-slate-500 max-w-sm mx-auto">
-            Upload images and diagrams to store them in Supabase Storage and easily attach them to questions.
+            Upload images and diagrams to store them in the image library and easily attach them to questions.
           </p>
         </div>
       ) : (
@@ -229,7 +229,16 @@ export const MediaLibraryPage: React.FC = () => {
                     alt={asset.name}
                     className="max-h-full max-w-full object-contain rounded-lg group-hover:scale-105 transition-transform duration-300"
                     onError={(e) => {
-                      (e.target as HTMLElement).style.opacity = '0.5';
+                      const target = e.currentTarget;
+                      if (!target.dataset.triedFallback) {
+                        target.dataset.triedFallback = 'true';
+                        const cur = target.src;
+                        if (cur.includes('/uploads/') && !cur.includes('/api/uploads/')) {
+                          target.src = cur.replace('/uploads/', '/api/uploads/');
+                          return;
+                        }
+                      }
+                      target.style.opacity = '0.5';
                     }}
                   />
                   <span className="absolute top-2 left-2 px-2 py-0.5 bg-slate-900/75 backdrop-blur-xs text-white text-[9px] font-extrabold uppercase rounded-md">
@@ -298,6 +307,16 @@ export const MediaLibraryPage: React.FC = () => {
               src={resolveImageUrl(lightboxAsset.url)}
               alt={lightboxAsset.name}
               className="max-h-[70vh] max-w-full object-contain rounded-lg border border-slate-200"
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (!target.dataset.triedFallback) {
+                  target.dataset.triedFallback = 'true';
+                  const cur = target.src;
+                  if (cur.includes('/uploads/') && !cur.includes('/api/uploads/')) {
+                    target.src = cur.replace('/uploads/', '/api/uploads/');
+                  }
+                }
+              }}
             />
             <div className="flex items-center justify-between w-full text-xs text-slate-500 pt-2 border-t border-slate-100">
               <span className="font-semibold uppercase text-[10px] px-2 py-0.5 bg-slate-100 rounded">{lightboxAsset.label}</span>

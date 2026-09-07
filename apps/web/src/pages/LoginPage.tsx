@@ -59,61 +59,31 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
     try {
       if (isSignUp) {
-        // 1. Check for duplicate user first
-        try {
-          const checkRes = await fetch('/api/auth/check-user', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: cleanEmail })
-          });
-          const checkData = await checkRes.json();
-          if (checkData.exists) {
-            setErrorMessage('An account with this email address already exists. Please sign in instead.');
-            setIsSignUp(false);
-            setIsLoading(false);
-            return;
-          }
-        } catch (checkErr) {
-          // Continue if offline check fails
-        }
-
-        // 2. Sign Up with Supabase Auth
-        const { data, error } = await supabase.auth.signUp({
-          email: cleanEmail,
-          password: cleanPassword
-        });
-
-        if (error) {
-          // If already registered in Supabase
-          if (error.message.toLowerCase().includes('already registered') || error.message.toLowerCase().includes('duplicate') || error.message.toLowerCase().includes('exists')) {
-            setErrorMessage('An account with this email address already exists. Please sign in instead.');
-            setIsSignUp(false);
-            setIsLoading(false);
-            return;
-          }
-          throw error;
-        }
-
-        // 3. Register user profile with Faculty Role and Assigned Subject from Admin DB
+        // Sign Up directly to MySQL Database
         const selectedRole = 'faculty';
         const selectedSubject = assignedSubject || (dbSubjects[0]?.name) || 'Biology';
         const profilePayload = {
           email: cleanEmail,
+          password: cleanPassword,
           name: name.trim(),
           role: selectedRole,
           assignedSubject: selectedSubject
         };
 
-        try {
-          await fetchApi('/api/auth/signup', {
-            method: 'POST',
-            body: JSON.stringify(profilePayload)
-          }).catch(() => null);
-        } catch (pErr) {
-          console.warn('Profile sync warning:', pErr);
+        const signupRes = await fetch('/api/auth/signup', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(profilePayload)
+        });
+        const signupData = await signupRes.json();
+
+        if (!signupRes.ok || !signupData.success) {
+          setErrorMessage(signupData.error || 'Registration failed. Please try again.');
+          setIsLoading(false);
+          return;
         }
 
-        const userProfile = {
+        const userProfile = signupData.data || {
           email: cleanEmail,
           name: name.trim(),
           role: selectedRole,
@@ -122,93 +92,40 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
         localStorage.setItem('eduforge_auth', 'true');
         localStorage.setItem('eduforge_user', JSON.stringify(userProfile));
-
-        if (data.session) {
-          onLoginSuccess();
-        } else {
-          setSuccessMessage('Registration successful! You can now sign in with your credentials.');
-          setIsSignUp(false);
-        }
+        setSuccessMessage('Account registered successfully in MySQL database!');
+        onLoginSuccess();
       } else {
-        // Sign In with Supabase Auth or Resilient Server/Local Auth
-        try {
-          const { data, error } = await supabase.auth.signInWithPassword({
-            email: cleanEmail,
-            password: cleanPassword
-          });
+        // Sign In directly through MySQL Backend Auth
+        const loginRes = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: cleanEmail, password: cleanPassword })
+        });
+        const loginData = await loginRes.json();
 
-          if (error) {
-            const isInvalidCreds = error.message.toLowerCase().includes('invalid login credentials') || error.message.toLowerCase().includes('invalid credentials');
-            if (isInvalidCreds) {
-              setErrorMessage('Invalid email or password. Please check your credentials.');
-              setIsLoading(false);
-              return;
-            }
-            console.warn('Supabase cloud connection warning:', error.message);
-          }
-        } catch (supabaseAuthErr: any) {
-          console.warn('Supabase direct auth unreachable, continuing with resilient profile authentication:', supabaseAuthErr);
+        if (!loginRes.ok || !loginData.success) {
+          setErrorMessage(loginData.error || 'Invalid email or password. Please check your credentials.');
+          setIsLoading(false);
+          return;
         }
 
-        // Fetch synced profile from backend
-        let userProfile: any = null;
-        try {
-          const profData: any = await fetchApi('/api/auth/login', {
-            method: 'POST',
-            body: JSON.stringify({ email: cleanEmail })
-          }).catch(() => null);
-
-          if (profData && (profData.success || profData.email)) {
-            const d = profData.data || profData;
-            userProfile = {
-              email: d.email || cleanEmail,
-              name: d.name || cleanEmail.split('@')[0],
-              role: d.role || (cleanEmail.startsWith('admin') ? 'admin' : 'faculty'),
-              assigned_subject: d.assigned_subject || (cleanEmail.startsWith('admin') ? 'All' : 'Biology')
-            };
-          }
-        } catch (fetchErr) {
-          console.warn('Profile fetch warning:', fetchErr);
-        }
-
-        if (!userProfile) {
-          let defaultSub: 'Physics' | 'Chemistry' | 'Biology' | 'Mathematics' | 'All' = 'Biology';
-          let defaultRole: 'admin' | 'faculty' = 'faculty';
-          let defaultName = cleanEmail.split('@')[0];
-
-          if (cleanEmail === 'admin@eduforge.com' || cleanEmail.startsWith('admin@')) {
-            defaultSub = 'All';
-            defaultRole = 'admin';
-            defaultName = 'System Admin';
-          } else if (cleanEmail.includes('physics')) {
-            defaultSub = 'Physics';
-            defaultName = 'Physics Faculty';
-          } else if (cleanEmail.includes('chemistry')) {
-            defaultSub = 'Chemistry';
-            defaultName = 'Chemistry Faculty';
-          } else if (cleanEmail.includes('biology')) {
-            defaultSub = 'Biology';
-            defaultName = 'Biology Faculty';
-          } else if (cleanEmail.includes('math')) {
-            defaultSub = 'Mathematics';
-            defaultName = 'Mathematics Faculty';
-          }
-
-          userProfile = {
-            email: cleanEmail,
-            name: defaultName,
-            role: defaultRole,
-            assigned_subject: defaultSub
-          };
-        }
+        const userProfile = loginData.data || loginData.user || {
+          email: cleanEmail,
+          name: cleanEmail.split('@')[0],
+          role: cleanEmail.startsWith('admin') ? 'admin' : 'faculty',
+          assigned_subject: cleanEmail.startsWith('admin') ? 'All' : 'Biology'
+        };
 
         localStorage.setItem('eduforge_auth', 'true');
         localStorage.setItem('eduforge_user', JSON.stringify(userProfile));
+        if (loginData.token) {
+          localStorage.setItem('eduforge_token', loginData.token);
+        }
         onLoginSuccess();
       }
     } catch (err: any) {
-      console.error('Auth Error:', err);
-      setErrorMessage(err?.message || 'Authentication failed. Please check your credentials.');
+      console.error('MySQL Auth Error:', err);
+      setErrorMessage(err?.message || 'Authentication error. Please check server connection.');
     } finally {
       setIsLoading(false);
     }
@@ -403,7 +320,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
 
           <div className="flex items-center justify-between pt-1">
             <span className="text-[11px] text-slate-500 font-medium flex items-center gap-1">
-              <ShieldCheck className="w-3.5 h-3.5 text-teal-600" /> Supabase Secured Authentication
+              <ShieldCheck className="w-3.5 h-3.5 text-teal-600" /> Secured Authentication
             </span>
           </div>
 
@@ -414,7 +331,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLoginSuccess }) => {
             className="w-full py-3 bg-teal-700 hover:bg-teal-800 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md hover:shadow-lg transition-all active:scale-[0.98] cursor-pointer flex items-center justify-center gap-2 mt-2"
           >
             {isLoading ? (
-              <span>Connecting to Supabase...</span>
+              <span>Connecting...</span>
             ) : (
               <>
                 <span>{isSignUp ? 'Register Account' : 'Sign In'}</span>

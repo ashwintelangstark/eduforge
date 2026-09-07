@@ -12,26 +12,61 @@ export function resolveImageUrl(src: string | undefined): string {
   let imgSrc = src.trim();
   imgSrc = imgSrc.replace(/&amp;/g, '&');
 
+  // If already absolute URL, blob, or data URI, return as-is
   if (imgSrc.startsWith('http://') || imgSrc.startsWith('https://') || imgSrc.startsWith('data:') || imgSrc.startsWith('blob:')) {
     return imgSrc;
   }
 
+  // Handle local server uploads (/uploads/... or uploads/...)
+  if (imgSrc.startsWith('/uploads/') || imgSrc.startsWith('uploads/')) {
+    const clean = imgSrc.startsWith('/') ? imgSrc : `/${imgSrc}`;
+    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      return `/api${clean}`;
+    }
+    return clean;
+  }
+
+  // Handle /api/uploads/... or api/uploads/...
+  if (imgSrc.startsWith('/api/uploads/') || imgSrc.startsWith('api/uploads/')) {
+    const clean = imgSrc.startsWith('/') ? imgSrc : `/${imgSrc}`;
+    return clean;
+  }
+
+  // Handle /public/uploads/... or public/uploads/...
+  if (imgSrc.startsWith('/public/uploads/') || imgSrc.startsWith('public/uploads/')) {
+    const clean = imgSrc.replace(/^\/?public\/uploads\//, '/uploads/');
+    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      return `/api${clean}`;
+    }
+    return clean;
+  }
+
+  // Handle bare filenames like '1788169529942_veu3an.jpg'
+  if (/\.(png|jpe?g|svg|webp|gif)$/i.test(imgSrc) && !imgSrc.includes('/')) {
+    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      return `/api/uploads/${imgSrc}`;
+    }
+    return `/uploads/${imgSrc}`;
+  }
+
+
   const supabaseUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || '';
   const bucketName = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_STORAGE_BUCKET) || 'question-assets';
 
-  if (supabaseUrl && (
+  const isConfiguredSupabase = supabaseUrl && !supabaseUrl.includes('your-project') && !supabaseUrl.includes('example.com');
+
+  if (isConfiguredSupabase && (
     imgSrc.startsWith('biology/') ||
     imgSrc.startsWith('physics/') ||
     imgSrc.startsWith('chemistry/') ||
     imgSrc.startsWith('mathematics/') ||
     imgSrc.startsWith('general/') ||
-    imgSrc.startsWith('uploads/') ||
     imgSrc.startsWith('questions/')
   )) {
     return `${supabaseUrl.replace(/\/$/, '')}/storage/v1/object/public/${bucketName}/${imgSrc}`;
   }
 
-  if (supabaseUrl && imgSrc.startsWith('storage/v1/object/public/')) {
+  if (isConfiguredSupabase && imgSrc.startsWith('storage/v1/object/public/')) {
     return `${supabaseUrl.replace(/\/$/, '')}/${imgSrc}`;
   }
 
@@ -280,6 +315,36 @@ const MathTextRendererComponent: React.FC<MathTextRendererProps> = ({
               if (item.type === 'equation' || item.latex) {
                 return <KaTeXRenderer key={idx} math={item.latex || item.rawLatex || ''} block={item.displayMode === 'block'} />;
               }
+              if (item.type === 'image' || item.imageUrl || item.url || item.src) {
+                const imgSrc = item.imageUrl || item.url || item.src;
+                return (
+                  <img
+                    key={`img-item-${idx}`}
+                    src={resolveImageUrl(imgSrc)}
+                    alt={item.alt || 'Question Image'}
+                    className="my-2 max-w-full h-auto object-contain border border-slate-200 p-1 bg-white rounded-md block shadow-2xs"
+                    onError={(e) => {
+                      const target = e.currentTarget;
+                      if (!target.dataset.triedFallback) {
+                        target.dataset.triedFallback = 'true';
+                        const current = target.src;
+                        if (current.includes('/uploads/') && !current.includes('/api/uploads/')) {
+                          target.src = current.replace('/uploads/', '/api/uploads/');
+                        }
+                      }
+                    }}
+                  />
+                );
+              }
+              if (item.type === 'diagram' && (item.diagramSvg || item.svg)) {
+                return (
+                  <div
+                    key={`diag-${idx}`}
+                    className="my-2 p-2 bg-white border border-slate-200 rounded flex items-center justify-center"
+                    dangerouslySetInnerHTML={{ __html: item.diagramSvg || item.svg }}
+                  />
+                );
+              }
               if (item.html || item.text) {
                 return <MathTextRenderer key={idx} text={item.html || item.text} />;
               }
@@ -287,8 +352,30 @@ const MathTextRendererComponent: React.FC<MathTextRendererProps> = ({
             })}
           </span>
         );
-      } else if (parsed && (parsed.type === 'equation' || parsed.latex)) {
-        return <KaTeXRenderer math={parsed.latex || parsed.rawLatex || ''} block={parsed.displayMode === 'block'} className={className} />;
+      } else if (parsed && typeof parsed === 'object') {
+        if (parsed.type === 'equation' || parsed.latex) {
+          return <KaTeXRenderer math={parsed.latex || parsed.rawLatex || ''} block={parsed.displayMode === 'block'} className={className} />;
+        }
+        if (parsed.type === 'image' || parsed.imageUrl || parsed.url || parsed.src) {
+          const imgSrc = parsed.imageUrl || parsed.url || parsed.src;
+          return (
+            <img
+              src={resolveImageUrl(imgSrc)}
+              alt={parsed.alt || 'Question Image'}
+              className={`my-2 max-w-full h-auto object-contain border border-slate-200 p-1 bg-white rounded-md block shadow-2xs ${className}`}
+              onError={(e) => {
+                const target = e.currentTarget;
+                if (!target.dataset.triedFallback) {
+                  target.dataset.triedFallback = 'true';
+                  const current = target.src;
+                  if (current.includes('/uploads/') && !current.includes('/api/uploads/')) {
+                    target.src = current.replace('/uploads/', '/api/uploads/');
+                  }
+                }
+              }}
+            />
+          );
+        }
       }
     } catch {
       // Not valid JSON, proceed to standard text parsing
@@ -323,6 +410,16 @@ const MathTextRendererComponent: React.FC<MathTextRendererProps> = ({
                 key={`img-${idx}`}
                 src={resolvedSrc}
                 alt={altMatch ? altMatch[1] : 'Question Image'}
+                onError={(e) => {
+                  const target = e.currentTarget;
+                  if (!target.dataset.triedFallback) {
+                    target.dataset.triedFallback = 'true';
+                    const current = target.src;
+                    if (current.includes('/uploads/') && !current.includes('/api/uploads/')) {
+                      target.src = current.replace('/uploads/', '/api/uploads/');
+                    }
+                  }
+                }}
                 style={{
                   width: customWidth || undefined,
                   maxWidth: '100%',

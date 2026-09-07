@@ -1,29 +1,41 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { supabase } from '../config/supabase.js';
+import crypto from 'crypto';
+import { db } from '../config/mysql.js';
 
 export const attemptsRouter = Router();
+
+function parseJson(val: any, defaultVal: any = {}) {
+  if (val === null || val === undefined) return defaultVal;
+  if (typeof val === 'object') return val;
+  try {
+    return JSON.parse(val);
+  } catch (e) {
+    return defaultVal;
+  }
+}
 
 // GET /api/attempts - Fetch all test attempt logs
 attemptsRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { data, error } = await supabase
-      .from('test_attempts')
-      .select('*')
-      .order('created_at', { ascending: false });
+    const [rows]: any = await db.query(`
+      SELECT a.*, p.title AS paper_title 
+      FROM \`test_attempts\` a
+      LEFT JOIN \`papers\` p ON a.paper_id = p.id
+      ORDER BY a.created_at DESC
+    `);
 
-    if (error || !data) {
-      return res.json({ success: true, data: [] });
-    }
-
-    const formatted = data.map((a: any) => ({
+    const formatted = (rows || []).map((a: any) => ({
       id: a.id,
-      student: a.student,
-      test: a.test,
+      paperId: a.paper_id,
+      test: a.paper_title || 'General Assessment',
+      student: a.student_name,
+      studentId: a.student_id,
+      answers: parseJson(a.answers, {}),
       score: a.score,
-      accuracy: a.accuracy,
+      totalMarks: a.total_marks,
+      timeSpentSeconds: a.time_spent_seconds,
       status: a.status,
-      createdAt: a.created_at,
-      updatedAt: a.updated_at
+      createdAt: a.created_at
     }));
 
     res.json({ success: true, data: formatted });
@@ -36,30 +48,36 @@ attemptsRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
 attemptsRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const { data: a, error } = await supabase
-      .from('test_attempts')
-      .select('*')
-      .eq('id', id)
-      .single();
+    const [rows]: any = await db.query(
+      `SELECT a.*, p.title AS paper_title 
+       FROM \`test_attempts\` a
+       LEFT JOIN \`papers\` p ON a.paper_id = p.id
+       WHERE a.id = ? LIMIT 1`,
+      [id]
+    );
 
-    if (error || !a) {
+    if (!rows || rows.length === 0) {
       return res.status(404).json({
         success: false,
         error: { code: 'ATTEMPT_NOT_FOUND', message: 'Test attempt record not found' }
       });
     }
 
+    const a = rows[0];
     res.json({
       success: true,
       data: {
         id: a.id,
-        student: a.student,
-        test: a.test,
+        paperId: a.paper_id,
+        test: a.paper_title || 'General Assessment',
+        student: a.student_name,
+        studentId: a.student_id,
+        answers: parseJson(a.answers, {}),
         score: a.score,
-        accuracy: a.accuracy,
+        totalMarks: a.total_marks,
+        timeSpentSeconds: a.time_spent_seconds,
         status: a.status,
-        createdAt: a.created_at,
-        updatedAt: a.updated_at
+        createdAt: a.created_at
       }
     });
   } catch (err) {
@@ -67,80 +85,41 @@ attemptsRouter.get('/:id', async (req: Request, res: Response, next: NextFunctio
   }
 });
 
-// POST /api/attempts - Create test attempt log
+// POST /api/attempts
 attemptsRouter.post('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = req.body;
+    const newId = body.id || crypto.randomUUID();
+    const answersJson = JSON.stringify(body.answers || {});
 
-    const { data: created, error } = await supabase
-      .from('test_attempts')
-      .insert({
-        student: body.student || 'Anonymous Student',
-        test: body.test || 'General Assessment',
-        score: body.score || '0 / 100',
-        accuracy: body.accuracy || '0%',
-        status: body.status || 'Completed'
-      })
-      .select()
-      .single();
+    await db.query(
+      `INSERT INTO \`test_attempts\` (\`id\`, \`paper_id\`, \`student_name\`, \`student_id\`, \`answers\`, \`score\`, \`total_marks\`, \`time_spent_seconds\`, \`status\`)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        newId,
+        body.paperId || null,
+        body.student || body.student_name || 'Anonymous Student',
+        body.studentId || null,
+        answersJson,
+        Number(body.score) || 0,
+        Number(body.totalMarks) || 100,
+        Number(body.timeSpentSeconds) || 0,
+        body.status || 'completed'
+      ]
+    );
 
-    if (error) {
-      console.error('Supabase Test Attempt Insert Error:', error);
-      throw error;
-    }
+    const [rows]: any = await db.query('SELECT * FROM `test_attempts` WHERE `id` = ?', [newId]);
+    const a = rows[0];
 
     res.status(201).json({
       success: true,
       data: {
-        id: created.id,
-        student: created.student,
-        test: created.test,
-        score: created.score,
-        accuracy: created.accuracy,
-        status: created.status,
-        createdAt: created.created_at,
-        updatedAt: created.updated_at
-      }
-    });
-  } catch (err) {
-    console.error('Create attempt error:', err);
-    next(err);
-  }
-});
-
-// PUT /api/attempts/:id - Update test attempt log
-attemptsRouter.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    const { id } = req.params;
-    const body = req.body;
-
-    const { data: updated, error } = await supabase
-      .from('test_attempts')
-      .update({
-        student: body.student,
-        test: body.test,
-        score: body.score,
-        accuracy: body.accuracy,
-        status: body.status,
-        updated_at: new Date().toISOString()
-      })
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) throw error;
-
-    res.json({
-      success: true,
-      data: {
-        id: updated.id,
-        student: updated.student,
-        test: updated.test,
-        score: updated.score,
-        accuracy: updated.accuracy,
-        status: updated.status,
-        createdAt: updated.created_at,
-        updatedAt: updated.updated_at
+        id: a.id,
+        student: a.student_name,
+        test: 'General Assessment',
+        score: a.score,
+        status: a.status,
+        createdAt: a.created_at
       }
     });
   } catch (err) {
@@ -148,16 +127,11 @@ attemptsRouter.put('/:id', async (req: Request, res: Response, next: NextFunctio
   }
 });
 
-// DELETE /api/attempts/:id - Delete test attempt log
+// DELETE /api/attempts/:id
 attemptsRouter.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const { error } = await supabase
-      .from('test_attempts')
-      .delete()
-      .eq('id', id);
-
-    if (error) throw error;
+    await db.query('DELETE FROM `test_attempts` WHERE `id` = ?', [id]);
     res.json({ success: true, data: { id } });
   } catch (err) {
     next(err);

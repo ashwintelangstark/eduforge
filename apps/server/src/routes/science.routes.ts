@@ -1,13 +1,13 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { supabase } from '../config/supabase.js';
+import { db } from '../config/mysql.js';
 
 export const scienceRouter = Router();
 
-// GET /api/physics/chapters
+// GET /api/physics/chapters or /api/physics
 scienceRouter.get('/physics/chapters', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { data, error } = await supabase.from('physics_symbols').select('*');
-    res.json({ success: true, data: data || [] });
+    const [rows]: any = await db.query("SELECT * FROM `science_libraries` WHERE `category` = 'physics' ORDER BY `name` ASC");
+    res.json({ success: true, data: rows || [] });
   } catch (err) {
     next(err);
   }
@@ -16,8 +16,8 @@ scienceRouter.get('/physics/chapters', async (req: Request, res: Response, next:
 // GET /api/chemistry/elements
 scienceRouter.get('/chemistry/elements', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { data, error } = await supabase.from('chemistry_symbols').select('*');
-    res.json({ success: true, data: data || [] });
+    const [rows]: any = await db.query("SELECT * FROM `science_libraries` WHERE `category` = 'chemistry' ORDER BY `name` ASC");
+    res.json({ success: true, data: rows || [] });
   } catch (err) {
     next(err);
   }
@@ -26,7 +26,8 @@ scienceRouter.get('/chemistry/elements', async (req: Request, res: Response, nex
 // GET /api/chemistry/notations
 scienceRouter.get('/chemistry/notations', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json({ success: true, data: [] });
+    const [rows]: any = await db.query("SELECT * FROM `science_libraries` WHERE `category` = 'chemistry_notations' ORDER BY `name` ASC");
+    res.json({ success: true, data: rows || [] });
   } catch (err) {
     next(err);
   }
@@ -35,8 +36,8 @@ scienceRouter.get('/chemistry/notations', async (req: Request, res: Response, ne
 // GET /api/units
 scienceRouter.get('/units', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { data, error } = await supabase.from('units').select('*');
-    res.json({ success: true, data: data || [] });
+    const [rows]: any = await db.query("SELECT * FROM `science_libraries` WHERE `category` = 'units' ORDER BY `name` ASC");
+    res.json({ success: true, data: rows || [] });
   } catch (err) {
     next(err);
   }
@@ -45,8 +46,8 @@ scienceRouter.get('/units', async (req: Request, res: Response, next: NextFuncti
 // GET /api/constants
 scienceRouter.get('/constants', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { data, error } = await supabase.from('constants').select('*');
-    res.json({ success: true, data: data || [] });
+    const [rows]: any = await db.query("SELECT * FROM `science_libraries` WHERE `category` = 'constants' ORDER BY `name` ASC");
+    res.json({ success: true, data: rows || [] });
   } catch (err) {
     next(err);
   }

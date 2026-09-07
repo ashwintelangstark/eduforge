@@ -21,11 +21,14 @@ export const PaperWizardModal: React.FC<PaperWizardModalProps> = ({
   const [templates, setTemplates] = useState<Template[]>([]);
   const [selectedTemplate, setSelectedTemplate] = useState<Template | null>(null);
 
+  const userSubject = user.assigned_subject || 'All';
+  const defaultSubjectStr = userSubject !== 'All' ? userSubject : 'Physics & Chemistry';
+
   // Paper info fields
-  const [paperTitle, setPaperTitle] = useState('Physics & Chemistry Mock Test 2026');
+  const [paperTitle, setPaperTitle] = useState(`${defaultSubjectStr} Assessment Test 2026`);
   const [instituteName, setInstituteName] = useState('APEX INSTITUTE OF SCIENCE & TECHNOLOGY');
   const [examName, setExamName] = useState('ALL INDIA PRE-MEDICAL & ENGINEERING ENTRANCE');
-  const [subject, setSubject] = useState('Physics & Chemistry');
+  const [subject, setSubject] = useState(defaultSubjectStr);
   const [timeAllowedMinutes, setTimeAllowedMinutes] = useState(180);
   const [maxMarks, setMaxMarks] = useState(180);
   const [generalInstructions, setGeneralInstructions] = useState<string[]>([
@@ -35,10 +38,15 @@ export const PaperWizardModal: React.FC<PaperWizardModalProps> = ({
   ]);
 
   // Sections
-  const [sections, setSections] = useState<{ title: string; instructions: string; marks: number }[]>([
-    { title: 'SECTION A: PHYSICS', instructions: 'Questions 1 to 25 carry 4 marks each.', marks: 100 },
-    { title: 'SECTION B: CHEMISTRY', instructions: 'Questions 26 to 45 carry 4 marks each.', marks: 80 }
-  ]);
+  const [sections, setSections] = useState<{ title: string; instructions: string; marks: number }[]>(() => {
+    if (userSubject !== 'All') {
+      return [{ title: `SECTION A: ${userSubject.toUpperCase()}`, instructions: 'Attempt all questions in this section.', marks: 180 }];
+    }
+    return [
+      { title: 'SECTION A: PHYSICS', instructions: 'Questions 1 to 25 carry 4 marks each.', marks: 100 },
+      { title: 'SECTION B: CHEMISTRY', instructions: 'Questions 26 to 45 carry 4 marks each.', marks: 80 }
+    ];
+  });
 
   useEffect(() => {
     if (isOpen) {

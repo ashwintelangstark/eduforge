@@ -59,26 +59,34 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         api.getChapters()
       ]);
 
-      const rawDocs = docs || [];
-      const rawQs = qList || [];
-      const rawSubs = subList || [];
-      const rawChs = chList || [];
-
-      setDocuments(rawDocs);
-      setAllBankQuestions(rawQs);
-      setApiSubjects(rawSubs);
-      setApiChapters(rawChs);
+      let rawDocs = docs || [];
+      let rawQs = qList || [];
+      let rawSubs = subList || [];
+      let rawChs = chList || [];
 
       if (user.role === 'faculty' && user.assigned_subject && user.assigned_subject !== 'All') {
         const targetSubLower = user.assigned_subject.toLowerCase().trim();
-        const fQs = rawQs.filter(q => {
-          const qSub = (q.subject || (q as any).subject_name || (q as any).subjects?.name || '').toLowerCase().trim();
-          return qSub.includes(targetSubLower) || targetSubLower.includes(qSub);
+        rawSubs = rawSubs.filter(s => (s.name || '').toLowerCase().trim() === targetSubLower || (s.code || '').toLowerCase().trim() === targetSubLower);
+        rawChs = rawChs.filter(ch => {
+          const sName = (ch.subject_name || ch.subject || (ch as any).subjects?.name || '').toLowerCase().trim();
+          return sName === targetSubLower || sName.includes(targetSubLower) || targetSubLower.includes(sName);
         });
-        setFacultyScopedQuestions(fQs);
-      } else {
-        setFacultyScopedQuestions(rawQs);
+        rawQs = rawQs.filter(q => {
+          const qSub = (q.subject || (q as any).subject_name || (q as any).subjects?.name || '').toLowerCase().trim();
+          return qSub === targetSubLower || qSub.includes(targetSubLower) || targetSubLower.includes(qSub);
+        });
+        rawDocs = rawDocs.filter(d => {
+          const title = (d.title || '').toLowerCase();
+          const meta = JSON.stringify(d.metadata || {}).toLowerCase();
+          return title.includes(targetSubLower) || meta.includes(targetSubLower);
+        });
       }
+
+      setDocuments(rawDocs);
+      setAllBankQuestions(rawQs);
+      setFacultyScopedQuestions(rawQs);
+      setApiSubjects(rawSubs);
+      setApiChapters(rawChs);
     } catch (err) {
       console.error('Failed to load dashboard:', err);
     } finally {

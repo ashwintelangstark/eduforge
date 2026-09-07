@@ -274,15 +274,32 @@ export const GenerateTestPage: React.FC<GenerateTestPageProps> = ({
       } else {
         setLoading(true);
       }
+      const params = userSubject !== 'All' ? { subject: userSubject } : undefined;
       const [qList, subList, chList] = await Promise.all([
-        api.getQuestions(undefined, force),
+        api.getQuestions(params, force),
         api.getSubjects(),
         api.getChapters()
       ]);
-      const initialQuestions = qList || [];
+      let initialQuestions = qList || [];
+      let initialSubs = subList || [];
+      let initialChs = chList || [];
+
+      if (user.role === 'faculty' && userSubject !== 'All') {
+        const targetSubLower = userSubject.toLowerCase().trim();
+        initialSubs = initialSubs.filter(s => (s.name || '').toLowerCase().trim() === targetSubLower || (s.code || '').toLowerCase().trim() === targetSubLower);
+        initialChs = initialChs.filter(ch => {
+          const sName = (ch.subject_name || ch.subject || (ch as any).subjects?.name || '').toLowerCase().trim();
+          return sName === targetSubLower || sName.includes(targetSubLower) || targetSubLower.includes(sName);
+        });
+        initialQuestions = initialQuestions.filter(q => {
+          const qSub = (q.subject || (q as any).subject_name || (q as any).subjects?.name || '').toLowerCase().trim();
+          return qSub === targetSubLower || qSub.includes(targetSubLower) || targetSubLower.includes(qSub);
+        });
+      }
+
       setQuestions(initialQuestions);
-      setSubjects(subList || []);
-      setChapters(chList || []);
+      setSubjects(initialSubs);
+      setChapters(initialChs);
 
       // If editing an existing document, populate all document fields
       if (initialDocument) {
@@ -899,10 +916,10 @@ export const GenerateTestPage: React.FC<GenerateTestPageProps> = ({
       const docModel = buildDocumentModel();
       if (initialDocument?.id) {
         await api.updateDocument(initialDocument.id, { ...docModel, id: initialDocument.id } as DocumentModel);
-        alert('Test paper updated successfully in Supabase!');
+        alert('Test paper updated successfully!');
       } else {
         const created = await api.createDocument(docModel);
-        alert(`Test paper "${created?.title || docModel.title}" saved to Supabase!`);
+        alert(`Test paper "${created?.title || docModel.title}" saved successfully!`);
       }
     } catch (err: any) {
       console.error('Failed to save draft:', err);

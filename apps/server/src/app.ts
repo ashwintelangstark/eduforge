@@ -22,26 +22,83 @@ app.use(cors({
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-user-subject', 'x-user-role', 'X-Requested-With']
 }));
+app.options('*', cors());
+
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
 import path from 'path';
 import fs from 'fs';
+import { db, getDbHealthInfo } from './config/mysql.js';
 
 // Healthcheck & API Status Endpoints
 app.get('/api', (req, res) => {
   res.json({ status: 'ok', message: 'EduForge API Server Running', timestamp: new Date().toISOString() });
 });
 
-app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get(['/health', '/api/health', '/db-health', '/api/db-health'], async (req, res) => {
+  try {
+    const [rows]: any = await db.query('SHOW TABLES;');
+    const tables = (rows || []).map((r: any) => Object.values(r)[0]);
+    res.json({
+      status: 'healthy',
+      connected: true,
+      info: getDbHealthInfo(),
+      tablesCount: tables.length,
+      tables: tables,
+      timestamp: new Date().toISOString()
+    });
+  } catch (err: any) {
+    res.status(500).json({
+      status: 'error',
+      connected: false,
+      info: getDbHealthInfo(),
+      error: err.message,
+      code: err.code,
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+
+// Serve uploaded media files and frontend static assets
+import { possibleUploadDirs } from './routes/assets.routes.js';
+
+possibleUploadDirs.forEach(dir => {
+  if (fs.existsSync(dir)) {
+    app.use('/uploads', express.static(dir));
+    app.use('/api/uploads', express.static(dir));
+    app.use('/public/uploads', express.static(dir));
+    app.use('/api/public/uploads', express.static(dir));
+    app.use('/api/api/uploads', express.static(dir));
+  }
 });
 
-// Serve frontend static assets from public/ or dist/ if available
+// Dynamic fallback file streaming for uploads (searches all possible upload directories)
+app.use(['/uploads', '/api/uploads', '/public/uploads', '/api/public/uploads', '/api/api/uploads'], (req, res, next) => {
+  const filename = path.basename(req.path);
+  if (!filename || filename === '.' || filename === '/') return next();
+
+  for (const dir of possibleUploadDirs) {
+    const fullPath = path.join(dir, filename);
+    if (fs.existsSync(fullPath)) {
+      return res.sendFile(fullPath);
+    }
+  }
+
+  try {
+    const decoded = decodeURIComponent(filename);
+    for (const dir of possibleUploadDirs) {
+      const fullPath = path.join(dir, decoded);
+      if (fs.existsSync(fullPath)) {
+        return res.sendFile(fullPath);
+      }
+    }
+  } catch {}
+
+  next();
+});
+
 const publicPath = path.join(process.cwd(), 'public');
 const distStaticPath = path.join(process.cwd(), 'dist');
 

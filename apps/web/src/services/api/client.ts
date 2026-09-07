@@ -15,17 +15,7 @@ const getApiBaseUrl = (): string => {
 
 const API_BASE_URL = getApiBaseUrl();
 
-export async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
-  let cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  let base = API_BASE_URL.replace(/\/+$/, '');
-
-  // Prevent duplicate /api/api if both base and endpoint contain /api
-  if (base.endsWith('/api') && cleanEndpoint.startsWith('/api/')) {
-    cleanEndpoint = cleanEndpoint.replace(/^\/api/, '');
-  }
-
-  const url = endpoint.startsWith('http') ? endpoint : `${base}${cleanEndpoint}`;
-
+async function executeFetch<T>(url: string, options?: RequestInit): Promise<T> {
   const user = getUserProfile();
   const authHeaders: Record<string, string> = {};
   if (user && user.assigned_subject) {
@@ -35,9 +25,9 @@ export async function fetchApi<T>(endpoint: string, options?: RequestInit): Prom
     authHeaders['x-user-role'] = user.role;
   }
 
-  // 6-second timeout so requests to slow/sleeping hosts fail over swiftly
+  // 25-second timeout to allow cPanel Phusion Passenger cold starts and DB connection initialization
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 6000);
+  const timeoutId = setTimeout(() => controller.abort(), 25000);
 
   try {
     const res = await fetch(url, {
@@ -60,5 +50,29 @@ export async function fetchApi<T>(endpoint: string, options?: RequestInit): Prom
     return json.data !== undefined ? json.data : json;
   } finally {
     clearTimeout(timeoutId);
+  }
+}
+
+export async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
+  let cleanEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  let base = API_BASE_URL.replace(/\/+$/, '');
+
+  // Prevent duplicate /api/api if both base and endpoint contain /api
+  if (base.endsWith('/api') && cleanEndpoint.startsWith('/api/')) {
+    cleanEndpoint = cleanEndpoint.replace(/^\/api/, '');
+  }
+
+  const url = endpoint.startsWith('http') ? endpoint : `${base}${cleanEndpoint}`;
+
+  try {
+    return await executeFetch<T>(url, options);
+  } catch (err: any) {
+    // If cold start / network glitch caused fetch to fail, retry once after 1.5s
+    const isNetworkErr = err?.name === 'TypeError' || err?.name === 'AbortError' || err?.message?.includes('fetch');
+    if (isNetworkErr) {
+      await new Promise(r => setTimeout(r, 1500));
+      return await executeFetch<T>(url, options);
+    }
+    throw err;
   }
 }

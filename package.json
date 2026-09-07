@@ -31,7 +31,6 @@
   "author": "HAEGL Technologies",
   "license": "ISC",
   "devDependencies": {
-    "@rollup/rollup-win32-x64-msvc": "^4.63.1",
     "concurrently": "^10.0.5"
   }
 }

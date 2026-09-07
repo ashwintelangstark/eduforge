@@ -85,6 +85,35 @@ export const assetsApi = {
     return this.uploadAsset(file, subject);
   },
 
+  async uploadBase64Image(base64Str: string, subject?: string, name?: string): Promise<{ id: string; url: string; public_url: string }> {
+    try {
+      if (!base64Str || !base64Str.startsWith('data:image/')) {
+        return { id: `asset-${Date.now()}`, url: base64Str, public_url: base64Str };
+      }
+      const endpoint = API_BASE_URL.endsWith('/api') ? `${API_BASE_URL}/assets/base64` : `${API_BASE_URL}/api/assets/base64`;
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ base64: base64Str, subject, name })
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        const data = json.data || json;
+        return {
+          id: String(data.id || Date.now()),
+          url: data.url || data.public_url || base64Str,
+          public_url: data.public_url || data.url || base64Str
+        };
+      }
+    } catch (e) {
+      console.warn('Base64 image upload failed, fallback to data URL:', e);
+    }
+    return { id: `asset-${Date.now()}`, url: base64Str, public_url: base64Str };
+  },
+
   async deleteMedia(id: string): Promise<void> {
     return fetchApi<void>(`/api/assets/${id}`, { method: 'DELETE' });
   }

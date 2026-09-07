@@ -1,5 +1,5 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { supabase } from '../config/supabase.js';
+import { db } from '../config/mysql.js';
 
 export const settingsRouter = Router();
 
@@ -27,11 +27,12 @@ const defaultSettings = {
 // GET /api/settings
 settingsRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { data, error } = await supabase.from('app_settings').select('*').eq('id', 1).single();
-    if (error || !data || !data.settings) {
+    const [rows]: any = await db.query("SELECT * FROM `app_settings` WHERE `key_name` = 'general_settings' LIMIT 1");
+    if (!rows || rows.length === 0 || !rows[0].value) {
       return res.json({ success: true, data: defaultSettings });
     }
-    res.json({ success: true, data: data.settings });
+    const val = typeof rows[0].value === 'string' ? JSON.parse(rows[0].value) : rows[0].value;
+    res.json({ success: true, data: val });
   } catch (err) {
     next(err);
   }
@@ -41,14 +42,14 @@ settingsRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
 settingsRouter.put('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const body = req.body;
-    const { data, error } = await supabase
-      .from('app_settings')
-      .upsert({ id: 1, settings: body, updated_at: new Date().toISOString() })
-      .select()
-      .single();
+    const jsonStr = JSON.stringify(body);
 
-    if (error) throw error;
-    res.json({ success: true, data: data.settings });
+    await db.query(
+      "INSERT INTO `app_settings` (`key_name`, `value`) VALUES ('general_settings', ?) ON DUPLICATE KEY UPDATE `value` = VALUES(`value`)",
+      [jsonStr]
+    );
+
+    res.json({ success: true, data: body });
   } catch (err) {
     next(err);
   }

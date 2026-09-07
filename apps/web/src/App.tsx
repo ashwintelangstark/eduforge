@@ -20,10 +20,10 @@ import { PaperWizardModal } from './paper/PaperWizardModal.js';
 import { QuestionBuilderModal } from './questions/QuestionBuilderModal.js';
 import { TemplateGalleryModal } from './templates/TemplateGalleryModal.js';
 import { api } from './services/api.js';
+import { supabase } from './services/supabaseDirect.js';
 import { DocumentModel, Template, Question } from '@eduforge/shared';
 import { ThemeProvider } from './state/ThemeContext.js';
 
-import { supabase } from './services/supabaseDirect.js';
 import { getUserProfile, UserProfile } from './utils/userProfile.js';
 
 const AppContent: React.FC = () => {
@@ -36,74 +36,12 @@ const AppContent: React.FC = () => {
   const [activeChapterFilter, setActiveChapterFilter] = useState<{ id?: string; title?: string } | null>(null);
   const [currentUser, setCurrentUser] = useState<UserProfile>(getUserProfile());
 
-  const syncSessionUser = (sessionUser?: any) => {
-    if (!sessionUser) {
-      setCurrentUser(getUserProfile());
-      return;
-    }
-    const cleanEmail = (sessionUser.email || '').toLowerCase().trim();
-    let defaultSub: 'Physics' | 'Chemistry' | 'Biology' | 'Mathematics' | 'All' | 'None' = 'None';
-    let defaultRole: 'admin' | 'faculty' | 'guest' = 'guest';
-    let defaultName = 'User';
-
-    if (cleanEmail === 'admin@eduforge.com' || cleanEmail.startsWith('admin@')) {
-      defaultSub = 'All';
-      defaultRole = 'admin';
-      defaultName = 'System Admin';
-    } else if (cleanEmail.includes('physics')) {
-      defaultSub = 'Physics';
-      defaultRole = 'faculty';
-      defaultName = 'Physics Faculty';
-    } else if (cleanEmail.includes('chemistry')) {
-      defaultSub = 'Chemistry';
-      defaultRole = 'faculty';
-      defaultName = 'Chemistry Faculty';
-    } else if (cleanEmail.includes('biology')) {
-      defaultSub = 'Biology';
-      defaultRole = 'faculty';
-      defaultName = 'Biology Faculty';
-    } else if (cleanEmail.includes('maths') || cleanEmail.includes('math')) {
-      defaultSub = 'Mathematics';
-      defaultRole = 'faculty';
-      defaultName = 'Mathematics Faculty';
-    } else {
-      defaultSub = 'None';
-      defaultRole = 'guest';
-      defaultName = cleanEmail.split('@')[0] || 'Guest User';
-    }
-
-    const prof: UserProfile = {
-      email: sessionUser.email,
-      name: defaultName,
-      role: defaultRole,
-      assigned_subject: defaultSub
-    };
-    localStorage.setItem('eduforge_user', JSON.stringify(prof));
-    setCurrentUser(prof);
-  };
-
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }: any) => {
-      if (session) {
-        localStorage.setItem('eduforge_auth', 'true');
-        syncSessionUser(session.user);
-        setIsAuthenticated(true);
-      }
-    });
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event: any, session: any) => {
-      if (session) {
-        localStorage.setItem('eduforge_auth', 'true');
-        syncSessionUser(session.user);
-        setIsAuthenticated(true);
-      } else {
-        localStorage.removeItem('eduforge_auth');
-        localStorage.removeItem('eduforge_user');
-        setIsAuthenticated(false);
-      }
-    });
-
-    return () => subscription.unsubscribe();
+    const isAuth = localStorage.getItem('eduforge_auth') === 'true';
+    setIsAuthenticated(isAuth);
+    if (isAuth) {
+      setCurrentUser(getUserProfile());
+    }
   }, []);
 
   // Shared frontend state for subjects and chapters synced with Supabase DB

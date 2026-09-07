@@ -41,7 +41,7 @@ export const ChaptersPage: React.FC<ChaptersPageProps> = ({
 
   const [chapters, setChapters] = useState<ChapterItem[]>(chaptersList || []);
   const [dbSubjects, setDbSubjects] = useState<SubjectItem[]>([]);
-  const [selectedSubjectFilter, setSelectedSubjectFilter] = useState<string>('all');
+  const [selectedSubjectFilter, setSelectedSubjectFilter] = useState<string>(user.role === 'faculty' && user.assigned_subject !== 'All' ? user.assigned_subject : 'all');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
   const loadBackendChapters = async () => {

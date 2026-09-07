@@ -514,8 +514,17 @@ export const CollegeExamPaper: React.FC<CollegeExamPaperProps> = ({
                               src={resolveImageUrl(qImg)}
                               alt="Question Diagram"
                               onError={(e) => {
-                                e.currentTarget.style.display = 'none';
-                                if (e.currentTarget.parentElement) e.currentTarget.parentElement.style.display = 'none';
+                                const target = e.currentTarget;
+                                if (!target.dataset.triedFallback) {
+                                  target.dataset.triedFallback = 'true';
+                                  const cur = target.src;
+                                  if (cur.includes('/uploads/') && !cur.includes('/api/uploads/')) {
+                                    target.src = cur.replace('/uploads/', '/api/uploads/');
+                                    return;
+                                  }
+                                }
+                                target.style.display = 'none';
+                                if (target.parentElement) target.parentElement.style.display = 'none';
                               }}
                               className="max-w-full h-auto object-contain border border-slate-300 p-1 rounded bg-white shadow-2xs"
                               style={{ maxHeight: 'none' }}
@@ -570,11 +579,33 @@ export const CollegeExamPaper: React.FC<CollegeExamPaperProps> = ({
                               const isCorrect = isAnswerKeyMode && (key === targetOptKey || opt.isCorrect);
                               const optText = opt.rawText || opt.text || opt.label || '';
 
+                              const optImg = (opt as any).imageUrl || (opt as any).image_url;
                               return (
                                 <div key={opt.id || oIdx} className={`flex items-start gap-1.5 ${isCorrect ? 'font-bold text-emerald-800 bg-emerald-50/70 px-1 rounded' : ''}`}>
                                   <span className="font-bold shrink-0">({key})</span>
                                   <div className="flex-1">
                                     <MathTextRenderer text={optText} />
+                                    {optImg && (
+                                      <div className="my-1">
+                                        <img
+                                          src={resolveImageUrl(optImg)}
+                                          alt={`Option ${key}`}
+                                          className="max-h-24 max-w-[160px] object-contain border border-slate-200 p-0.5 rounded bg-white inline-block shadow-2xs"
+                                          onError={(e) => {
+                                            const target = e.currentTarget;
+                                            if (!target.dataset.triedFallback) {
+                                              target.dataset.triedFallback = 'true';
+                                              const cur = target.src;
+                                              if (cur.includes('/uploads/') && !cur.includes('/api/uploads/')) {
+                                                target.src = cur.replace('/uploads/', '/api/uploads/');
+                                                return;
+                                              }
+                                            }
+                                            target.style.display = 'none';
+                                          }}
+                                        />
+                                      </div>
+                                    )}
                                   </div>
                                   {isCorrect && <Check className="inline w-3.5 h-3.5 text-emerald-600 stroke-[3] ml-1 shrink-0" />}
                                 </div>

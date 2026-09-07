@@ -249,6 +249,8 @@ export const RichTextEditor: React.FC<RichTextEditorProps> = ({
           editor.state.doc.descendants((node, pos) => {
             if (node.type.name === 'image' && node.attrs.src === localDataUrl) {
               editor.chain().setNodeSelection(pos).updateAttributes('image', { src: res.url }).run();
+              setSelectedImageSrc(res.url);
+              onChange(editor.getHTML());
               return false;
             }
           });

@@ -171,8 +171,9 @@ const EditableOptionItem: React.FC<{
 
       <div className="flex-1 flex flex-col md:flex-row items-start md:items-center gap-2.5 min-w-0">
         {/* Option Image Rendering (Rendered side-by-side with statement text) */}
-        {opt.imageUrl && (() => {
-          const imgSrc = resolveImageUrl(opt.imageUrl);
+        {(opt.imageUrl || (opt as any).image_url) && (() => {
+          const rawUrl = opt.imageUrl || (opt as any).image_url;
+          const imgSrc = resolveImageUrl(rawUrl);
           return (
             <div className="relative group/optimg shrink-0 my-0.5">
               <img
@@ -180,10 +181,16 @@ const EditableOptionItem: React.FC<{
                 alt={`Option ${label}`}
                 onError={(e) => {
                   const target = e.currentTarget;
-                  if (!target.dataset.triedFallback && imgSrc.includes('/api/assets/')) {
+                  if (!target.dataset.triedFallback) {
                     target.dataset.triedFallback = 'true';
-                    if (!imgSrc.includes('/raw/')) {
-                      target.src = imgSrc.replace('/api/assets/', '/api/assets/raw/');
+                    const cur = target.src;
+                    if (cur.includes('/uploads/') && !cur.includes('/api/uploads/')) {
+                      target.src = cur.replace('/uploads/', '/api/uploads/');
+                      return;
+                    }
+                    if (cur.includes('/api/assets/') && !cur.includes('/raw/')) {
+                      target.src = cur.replace('/api/assets/', '/api/assets/raw/');
+                      return;
                     }
                   }
                 }}

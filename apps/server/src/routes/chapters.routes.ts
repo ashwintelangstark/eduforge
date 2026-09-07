@@ -1,13 +1,14 @@
 import { Router, Request, Response, NextFunction } from 'express';
-import { supabase } from '../config/supabase.js';
+import crypto from 'crypto';
+import { db } from '../config/mysql.js';
 
 export const chaptersRouter = Router();
 
-// Helper to resolve or auto-create valid subject_id UUID
+// Helper to resolve or auto-create valid subject_id UUID in MySQL
 async function resolveSubjectId(subjectIdOrName?: any): Promise<string | null> {
   if (!subjectIdOrName) {
-    const { data: firstSub } = await supabase.from('subjects').select('id').limit(1).maybeSingle();
-    return firstSub?.id || null;
+    const [firstSub]: any = await db.query('SELECT `id` FROM `subjects` LIMIT 1');
+    return firstSub && firstSub.length > 0 ? firstSub[0].id : null;
   }
 
   const strVal = String(subjectIdOrName).trim();
@@ -17,7 +18,7 @@ async function resolveSubjectId(subjectIdOrName?: any): Promise<string | null> {
     return strVal;
   }
 
-  const { data: allSubs } = await supabase.from('subjects').select('id, name, code');
+  const [allSubs]: any = await db.query('SELECT `id`, `name`, `code` FROM `subjects`');
   if (Array.isArray(allSubs)) {
     const norm = strVal.toLowerCase();
     const match = allSubs.find(s =>
@@ -32,44 +33,48 @@ async function resolveSubjectId(subjectIdOrName?: any): Promise<string | null> {
 
   // Create subject if not exists
   const subCode = strVal.substring(0, 3).toUpperCase();
-  const { data: newSub } = await supabase
-    .from('subjects')
-    .insert({ name: strVal, code: subCode, color: 'bg-teal-50 text-teal-700 border-teal-200' })
-    .select('id')
-    .maybeSingle();
+  const newId = crypto.randomUUID();
+  await db.query(
+    'INSERT INTO `subjects` (`id`, `name`, `code`, `color`) VALUES (?, ?, ?, ?)',
+    [newId, strVal, subCode, 'bg-teal-50 text-teal-700 border-teal-200']
+  );
 
-  return newSub?.id || null;
+  return newId;
 }
 
 // GET /api/chapters
 chaptersRouter.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { subjectId } = req.query;
-    let query = supabase.from('chapters').select('*, subjects(name)').order('created_at', { ascending: false });
+
+    let sql = `
+      SELECT c.*, s.name AS subject_name 
+      FROM \`chapters\` c
+      LEFT JOIN \`subjects\` s ON c.subject_id = s.id
+      WHERE 1=1
+    `;
+    const params: any[] = [];
 
     if (subjectId) {
       const targetUuid = await resolveSubjectId(subjectId as string);
       if (targetUuid) {
-        query = query.eq('subject_id', targetUuid);
+        sql += ' AND c.subject_id = ?';
+        params.push(targetUuid);
       }
     }
 
-    const [chaptersRes, questionsRes] = await Promise.all([
-      query,
-      supabase.from('questions').select('id, chapter_id, subject_id')
-    ]);
+    sql += ' ORDER BY c.created_at DESC';
 
-    if (chaptersRes.error) {
-      console.error('Supabase getChapters error:', chaptersRes.error);
-      return res.json({ success: true, data: [] });
-    }
+    const [chaptersRows]: any = await db.query(sql, params);
+    const [questionsRows]: any = await db.query('SELECT `id`, `chapter_id`, `subject_id` FROM `questions`');
 
-    let chapters = chaptersRes.data || [];
+    let chapters = chaptersRows || [];
     const userSubject = (req.query.userSubject || req.query.subject || req.headers['x-user-subject'] || 'All') as string;
     if (userSubject && userSubject !== 'All') {
-      chapters = chapters.filter((c: any) => (c.subjects?.name || '').toLowerCase() === userSubject.toLowerCase());
+      chapters = chapters.filter((c: any) => (c.subject_name || '').toLowerCase() === userSubject.toLowerCase());
     }
-    const questions = questionsRes.data || [];
+
+    const questions = questionsRows || [];
 
     const formatted = chapters.map((ch: any) => {
       const chId = String(ch.id || '').toLowerCase();
@@ -83,7 +88,7 @@ chaptersRouter.get('/', async (req: Request, res: Response, next: NextFunction) 
         id: ch.id,
         title: ch.title,
         code: ch.chapter_code,
-        subject: ch.subjects?.name || 'Biology',
+        subject: ch.subject_name || 'Biology',
         subjectId: ch.subject_id,
         count: qCount
       };
@@ -102,12 +107,12 @@ chaptersRouter.post('/', async (req: Request, res: Response, next: NextFunction)
     const targetUuid = await resolveSubjectId(subjectId || subject);
     const chapterTitle = (title || name || '').trim();
 
-    // Prevent duplicate chapters under the same subject
+    // Prevent duplicate chapters under same subject
     if (targetUuid && chapterTitle) {
-      const { data: existingChapters } = await supabase
-        .from('chapters')
-        .select('*, subjects(name)')
-        .eq('subject_id', targetUuid);
+      const [existingChapters]: any = await db.query(
+        'SELECT c.*, s.name AS subject_name FROM `chapters` c LEFT JOIN `subjects` s ON c.subject_id = s.id WHERE c.subject_id = ?',
+        [targetUuid]
+      );
 
       if (Array.isArray(existingChapters) && existingChapters.length > 0) {
         const cClean = chapterTitle.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -126,7 +131,7 @@ chaptersRouter.post('/', async (req: Request, res: Response, next: NextFunction)
               id: matched.id,
               title: matched.title,
               code: matched.chapter_code,
-              subject: matched.subjects?.name || subject || 'Biology',
+              subject: matched.subject_name || subject || 'Biology',
               subjectId: matched.subject_id,
               count: 0
             }
@@ -135,33 +140,30 @@ chaptersRouter.post('/', async (req: Request, res: Response, next: NextFunction)
       }
     }
 
-    const { data, error } = await supabase
-      .from('chapters')
-      .insert({
-        subject_id: targetUuid,
-        title: chapterTitle,
-        chapter_code: code || `CH-${Date.now().toString().slice(-4)}`
-      })
-      .select('*, subjects(name)')
-      .single();
+    const newId = crypto.randomUUID();
+    const chapterCode = code || `CH-${Date.now().toString().slice(-4)}`;
 
-    if (error) {
-      console.error('Supabase create chapter error:', error);
-      throw error;
-    }
+    await db.query(
+      'INSERT INTO `chapters` (`id`, `subject_id`, `title`, `chapter_code`) VALUES (?, ?, ?, ?)',
+      [newId, targetUuid, chapterTitle, chapterCode]
+    );
+
+    const [created]: any = await db.query(
+      'SELECT c.*, s.name AS subject_name FROM `chapters` c LEFT JOIN `subjects` s ON c.subject_id = s.id WHERE c.id = ?',
+      [newId]
+    );
 
     const formatted = {
-      id: data.id,
-      title: data.title,
-      code: data.chapter_code,
-      subject: data.subjects?.name || subject || 'Biology',
-      subjectId: data.subject_id,
+      id: created[0].id,
+      title: created[0].title,
+      code: created[0].chapter_code,
+      subject: created[0].subject_name || subject || 'Biology',
+      subjectId: created[0].subject_id,
       count: 0
     };
 
     res.status(201).json({ success: true, data: formatted });
   } catch (err) {
-    console.error('Create chapter route error:', err);
     next(err);
   }
 });
@@ -172,31 +174,31 @@ chaptersRouter.put('/:id', async (req: Request, res: Response, next: NextFunctio
     const { id } = req.params;
     const { title, name, code, subject, subjectId } = req.body;
 
-    const updatePayload: any = {
-      title: title || name,
-      updated_at: new Date().toISOString()
-    };
-    if (code) updatePayload.chapter_code = code;
+    let targetUuid: string | null = null;
     if (subjectId || subject) {
-      const targetUuid = await resolveSubjectId(subjectId || subject);
-      if (targetUuid) updatePayload.subject_id = targetUuid;
+      targetUuid = await resolveSubjectId(subjectId || subject);
     }
 
-    const { data, error } = await supabase
-      .from('chapters')
-      .update(updatePayload)
-      .eq('id', id)
-      .select('*, subjects(name)')
-      .single();
+    await db.query(
+      'UPDATE `chapters` SET `title` = COALESCE(?, `title`), `chapter_code` = COALESCE(?, `chapter_code`), `subject_id` = COALESCE(?, `subject_id`) WHERE `id` = ?',
+      [title || name, code, targetUuid, id]
+    );
 
-    if (error) throw error;
+    const [rows]: any = await db.query(
+      'SELECT c.*, s.name AS subject_name FROM `chapters` c LEFT JOIN `subjects` s ON c.subject_id = s.id WHERE c.id = ?',
+      [id]
+    );
+
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ success: false, error: 'Chapter not found' });
+    }
 
     const formatted = {
-      id: data.id,
-      title: data.title,
-      code: data.chapter_code,
-      subject: data.subjects?.name || subject || 'Biology',
-      subjectId: data.subject_id,
+      id: rows[0].id,
+      title: rows[0].title,
+      code: rows[0].chapter_code,
+      subject: rows[0].subject_name || subject || 'Biology',
+      subjectId: rows[0].subject_id,
       count: 0
     };
 
@@ -210,8 +212,7 @@ chaptersRouter.put('/:id', async (req: Request, res: Response, next: NextFunctio
 chaptersRouter.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    const { error } = await supabase.from('chapters').delete().eq('id', id);
-    if (error) throw error;
+    await db.query('DELETE FROM `chapters` WHERE `id` = ?', [id]);
     res.json({ success: true, data: { id } });
   } catch (err) {
     next(err);
