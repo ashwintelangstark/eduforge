@@ -160,6 +160,17 @@ function formatQuestion(q: any, options: any[] = []) {
     };
   });
 
+  // Fallback subject deduction from question code prefix if subject is null / General
+  let resolvedSubject = q.subject_name;
+  if (!resolvedSubject || resolvedSubject === 'General') {
+    const code = String(q.question_code || '').toUpperCase();
+    if (code.startsWith('PHY')) resolvedSubject = 'Physics';
+    else if (code.startsWith('CHE')) resolvedSubject = 'Chemistry';
+    else if (code.startsWith('BIO') || code.startsWith('BOT') || code.startsWith('ZOO')) resolvedSubject = 'Biology';
+    else if (code.startsWith('MAT') || code.startsWith('MTH')) resolvedSubject = 'Mathematics';
+    else resolvedSubject = 'General';
+  }
+
   return {
     id: q.id,
     questionCode: q.question_code,
@@ -181,8 +192,8 @@ function formatQuestion(q: any, options: any[] = []) {
     diagramSvg: diagramSvg || undefined,
     diagramUrl: diagramUrl || undefined,
     imageUrl: diagramUrl || undefined,
-    subject: q.subject_name || 'General',
-    subject_name: q.subject_name || 'General',
+    subject: resolvedSubject,
+    subject_name: resolvedSubject,
     subjectId: q.subject_id,
     subject_id: q.subject_id,
     chapter: q.chapter_title || 'General',
@@ -402,12 +413,31 @@ questionsRouter.put('/:id', async (req: Request, res: Response, next: NextFuncti
       return res.status(404).json({ success: false, error: 'Question not found' });
     }
 
+    // Resolve subject & chapter IDs if provided
+    let subjectId = body.subjectId || body.subject_id;
+    let chapterId = body.chapterId || body.chapter_id;
+
+    if (!subjectId && body.subject) {
+      const [s]: any = await db.query('SELECT `id` FROM `subjects` WHERE LOWER(`name`) = LOWER(?) LIMIT 1', [body.subject]);
+      if (s && s.length > 0) subjectId = s[0].id;
+    }
+
+    if (!chapterId && body.chapter) {
+      const [c]: any = await db.query('SELECT `id` FROM `chapters` WHERE LOWER(`title`) = LOWER(?) LIMIT 1', [body.chapter]);
+      if (c && c.length > 0) chapterId = c[0].id;
+    }
+
     const contentJson = body.content !== undefined ? JSON.stringify(body.content) : existing[0].content;
     const explanationJson = body.explanation !== undefined ? JSON.stringify(body.explanation) : existing[0].explanation;
     const correctOption = (body.correctOption || body.correct_option || body.correctAnswer || existing[0].correct_option || 'a').toLowerCase();
+    const qCode = body.questionCode || body.question_code;
 
     await db.query(
       `UPDATE \`questions\` SET
+         \`question_code\` = COALESCE(?, \`question_code\`),
+         \`subject_id\` = COALESCE(?, \`subject_id\`),
+         \`chapter_id\` = COALESCE(?, \`chapter_id\`),
+         \`question_type\` = COALESCE(?, \`question_type\`),
          \`content\` = ?,
          \`explanation\` = ?,
          \`difficulty\` = COALESCE(?, \`difficulty\`),
@@ -421,6 +451,10 @@ questionsRouter.put('/:id', async (req: Request, res: Response, next: NextFuncti
          \`updated_at\` = CURRENT_TIMESTAMP
        WHERE \`id\` = ?`,
       [
+        qCode,
+        subjectId,
+        chapterId,
+        body.questionType || body.question_type,
         contentJson,
         explanationJson,
         body.difficulty,

@@ -61,16 +61,23 @@ export const apiCache = {
       return;
     }
 
-    for (const key of memoryCache.keys()) {
+    // Clear matching keys from memoryCache
+    for (const key of Array.from(memoryCache.keys())) {
       if (key.includes(keyPattern)) {
         memoryCache.delete(key);
-        try {
-          if (typeof window !== 'undefined' && window.sessionStorage) {
-            sessionStorage.removeItem(`edu_cache_${key}`);
-          }
-        } catch {}
       }
     }
+
+    // Directly clear matching keys from sessionStorage
+    try {
+      if (typeof window !== 'undefined' && window.sessionStorage) {
+        Object.keys(sessionStorage).forEach(k => {
+          if (k.startsWith('edu_cache_') && k.includes(keyPattern)) {
+            sessionStorage.removeItem(k);
+          }
+        });
+      }
+    } catch {}
   },
 
   async fetchWithCache<T>(

@@ -41,7 +41,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   useEffect(() => {
-    loadDashboardData();
+    loadDashboardData(true);
   }, []);
 
   const loadDashboardData = async (force = false) => {
@@ -66,6 +66,7 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
 
       if (user.role === 'faculty' && user.assigned_subject && user.assigned_subject !== 'All') {
         const targetSubLower = user.assigned_subject.toLowerCase().trim();
+        const targetCodePrefix = user.assigned_subject.substring(0, 3).toUpperCase();
         rawSubs = rawSubs.filter(s => (s.name || '').toLowerCase().trim() === targetSubLower || (s.code || '').toLowerCase().trim() === targetSubLower);
         rawChs = rawChs.filter(ch => {
           const sName = (ch.subject_name || ch.subject || (ch as any).subjects?.name || '').toLowerCase().trim();
@@ -73,7 +74,8 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
         });
         rawQs = rawQs.filter(q => {
           const qSub = (q.subject || (q as any).subject_name || (q as any).subjects?.name || '').toLowerCase().trim();
-          return qSub === targetSubLower || qSub.includes(targetSubLower) || targetSubLower.includes(qSub);
+          const qCode = ((q as any).question_code || (q as any).questionCode || '').trim().toUpperCase();
+          return qSub === targetSubLower || qSub.includes(targetSubLower) || targetSubLower.includes(qSub) || (qCode && qCode.startsWith(targetCodePrefix));
         });
         rawDocs = rawDocs.filter(d => {
           const title = (d.title || '').toLowerCase();
@@ -162,7 +164,13 @@ export const DashboardPage: React.FC<DashboardPageProps> = ({
     const subjectQuestions = allBankQuestions.filter(q => {
       const qSub = (q.subject || (q as any).subject_name || (q as any).subjects?.name || '').trim().toLowerCase();
       const qSubId = (q as any).subject_id || (q as any).subjectId;
-      return (qSub && (qSub === subNameLower || qSub.includes(subNameLower) || subNameLower.includes(qSub))) || (subId && qSubId === subId);
+      const qCode = ((q as any).question_code || (q as any).questionCode || '').trim().toUpperCase();
+      const codePrefix = (sub.code || subName.substring(0, 3)).toUpperCase();
+
+      const matchesNameOrId = (qSub && (qSub === subNameLower || qSub.includes(subNameLower) || subNameLower.includes(qSub))) || (subId && qSubId === subId);
+      const matchesCode = qCode && codePrefix && qCode.startsWith(codePrefix);
+
+      return matchesNameOrId || matchesCode;
     });
     const count = subjectQuestions.length;
 

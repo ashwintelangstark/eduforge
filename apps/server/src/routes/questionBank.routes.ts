@@ -77,6 +77,17 @@ questionBankRouter.get('/', async (req: Request, res: Response, next: NextFuncti
         if (m) diagramUrl = m[1];
       }
 
+      // Fallback subject deduction from question code prefix if subject is null / General
+      let resolvedSubject = q.subject_name;
+      if (!resolvedSubject || resolvedSubject === 'General') {
+        const code = String(q.question_code || '').toUpperCase();
+        if (code.startsWith('PHY')) resolvedSubject = 'Physics';
+        else if (code.startsWith('CHE')) resolvedSubject = 'Chemistry';
+        else if (code.startsWith('BIO') || code.startsWith('BOT') || code.startsWith('ZOO')) resolvedSubject = 'Biology';
+        else if (code.startsWith('MAT') || code.startsWith('MTH')) resolvedSubject = 'Mathematics';
+        else resolvedSubject = 'General';
+      }
+
       return {
         id: q.id,
         questionCode: q.question_code,
@@ -94,8 +105,8 @@ questionBankRouter.get('/', async (req: Request, res: Response, next: NextFuncti
         optionLayout: q.option_layout || 'grid_2x2',
         year: q.year,
         source: q.source,
-        subject: q.subject_name || 'General',
-        subject_name: q.subject_name || 'General',
+        subject: resolvedSubject,
+        subject_name: resolvedSubject,
         subjectId: q.subject_id,
         subject_id: q.subject_id,
         chapter: q.chapter_title || 'General',
