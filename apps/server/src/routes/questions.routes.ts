@@ -326,30 +326,45 @@ questionsRouter.post('/', async (req: Request, res: Response, next: NextFunction
   try {
     const body = await dumpBase64Images(req.body);
     const newId = body.id || crypto.randomUUID();
-    const qCode = body.questionCode || body.question_code || `Q-${Date.now().toString().slice(-6)}`;
 
-    // Resolve subject & chapter IDs
-    let subjectId = body.subjectId || body.subject_id || null;
-    let chapterId = body.chapterId || body.chapter_id || null;
-
-    if (!subjectId && body.subject) {
-      const [s]: any = await db.query('SELECT `id` FROM `subjects` WHERE LOWER(`name`) = LOWER(?) LIMIT 1', [body.subject]);
-      if (s && s.length > 0) subjectId = s[0].id;
+    // Validate & resolve subject_id against MySQL subjects table
+    let validSubjectId: string | null = null;
+    const rawSub = body.subjectId || body.subject_id;
+    if (rawSub) {
+      const [s]: any = await db.query('SELECT `id` FROM `subjects` WHERE `id` = ? OR LOWER(`name`) = LOWER(?) OR LOWER(`code`) = LOWER(?) LIMIT 1', [rawSub, rawSub, rawSub]);
+      if (s && s.length > 0) validSubjectId = s[0].id;
+    }
+    if (!validSubjectId && body.subject) {
+      const [s]: any = await db.query('SELECT `id` FROM `subjects` WHERE LOWER(`name`) = LOWER(?) OR LOWER(`code`) = LOWER(?) LIMIT 1', [body.subject, body.subject]);
+      if (s && s.length > 0) validSubjectId = s[0].id;
     }
 
-    if (!chapterId && body.chapter) {
-      const [c]: any = await db.query('SELECT `id` FROM `chapters` WHERE LOWER(`title`) = LOWER(?) LIMIT 1', [body.chapter]);
-      if (c && c.length > 0) chapterId = c[0].id;
+    // Validate & resolve chapter_id against MySQL chapters table
+    let validChapterId: string | null = null;
+    const rawChap = body.chapterId || body.chapter_id;
+    if (rawChap) {
+      const [c]: any = await db.query('SELECT `id` FROM `chapters` WHERE `id` = ? OR LOWER(`title`) = LOWER(?) OR LOWER(`chapter_code`) = LOWER(?) LIMIT 1', [rawChap, rawChap, rawChap]);
+      if (c && c.length > 0) validChapterId = c[0].id;
+    }
+    if (!validChapterId && body.chapter) {
+      const [c]: any = await db.query('SELECT `id` FROM `chapters` WHERE LOWER(`title`) = LOWER(?) OR LOWER(`chapter_code`) = LOWER(?) LIMIT 1', [body.chapter, body.chapter]);
+      if (c && c.length > 0) validChapterId = c[0].id;
+    }
+
+    let qCode = (body.questionCode || body.question_code || `Q-${Date.now().toString().slice(-6)}`).trim();
+    const [dup]: any = await db.query('SELECT `id` FROM `questions` WHERE `question_code` = ? LIMIT 1', [qCode]);
+    if (dup && dup.length > 0) {
+      qCode = `${qCode}-${Date.now().toString().slice(-4)}`;
     }
 
     const contentJson = JSON.stringify(body.content || []);
     const explanationJson = JSON.stringify(body.explanation || []);
     const difficulty = body.difficulty || 'Medium';
-    const marks = Number(body.marks) || 4;
-    const negMarks = Number(body.negativeMarks ?? body.negative_marks ?? 1);
-    const correctOption = (body.correctOption || body.correct_option || body.correctAnswer || 'a').toLowerCase();
+    const marks = isNaN(Number(body.marks)) ? 4 : Number(body.marks);
+    const negMarks = isNaN(Number(body.negativeMarks ?? body.negative_marks)) ? 1 : Number(body.negativeMarks ?? body.negative_marks);
+    const correctOption = String(body.correctOption || body.correct_option || body.correctAnswer || 'a').toLowerCase().trim();
     const optionLayout = body.optionLayout || body.option_layout || 'grid_2x2';
-    const year = body.year || 2024;
+    const year = Number(body.year) || 2024;
     const source = body.source || 'Question Bank';
     const rawText = body.rawText || body.raw_text || '';
 
@@ -357,14 +372,14 @@ questionsRouter.post('/', async (req: Request, res: Response, next: NextFunction
       `INSERT INTO \`questions\` 
        (\`id\`, \`question_code\`, \`subject_id\`, \`chapter_id\`, \`question_type\`, \`content\`, \`explanation\`, \`difficulty\`, \`marks\`, \`negative_marks\`, \`correct_option\`, \`option_layout\`, \`year\`, \`source\`, \`raw_text\`)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [newId, qCode, subjectId, chapterId, body.questionType || 'MCQ', contentJson, explanationJson, difficulty, marks, negMarks, correctOption, optionLayout, year, source, rawText]
+      [newId, qCode, validSubjectId, validChapterId, body.questionType || body.question_type || 'MCQ_SINGLE', contentJson, explanationJson, difficulty, marks, negMarks, correctOption, optionLayout, year, source, rawText]
     );
 
     // Insert options
     if (Array.isArray(body.options)) {
       for (let i = 0; i < body.options.length; i++) {
         const opt = body.options[i];
-        const optId = opt.id || crypto.randomUUID();
+        const optId = crypto.randomUUID();
         const optKey = (opt.key || opt.option_key || String.fromCharCode(97 + i)).toLowerCase();
         let contentArr = opt.content || [];
         if (!Array.isArray(contentArr)) contentArr = [contentArr];
@@ -397,8 +412,9 @@ questionsRouter.post('/', async (req: Request, res: Response, next: NextFunction
     );
 
     res.status(201).json({ success: true, data: formatQuestion(created[0], savedOpts || []) });
-  } catch (err) {
-    next(err);
+  } catch (err: any) {
+    console.error('Error creating question in MySQL:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Database error creating question' });
   }
 });
 
@@ -408,73 +424,108 @@ questionsRouter.put('/:id', async (req: Request, res: Response, next: NextFuncti
     const { id } = req.params;
     const body = await dumpBase64Images(req.body);
 
-    const [existing]: any = await db.query('SELECT * FROM `questions` WHERE `id` = ? LIMIT 1', [id]);
+    const [existing]: any = await db.query('SELECT * FROM `questions` WHERE `id` = ? OR `question_code` = ? LIMIT 1', [id, id]);
     if (!existing || existing.length === 0) {
       return res.status(404).json({ success: false, error: 'Question not found' });
     }
 
-    // Resolve subject & chapter IDs if provided
-    let subjectId = body.subjectId || body.subject_id;
-    let chapterId = body.chapterId || body.chapter_id;
+    const realId = existing[0].id;
 
-    if (!subjectId && body.subject) {
-      const [s]: any = await db.query('SELECT `id` FROM `subjects` WHERE LOWER(`name`) = LOWER(?) LIMIT 1', [body.subject]);
-      if (s && s.length > 0) subjectId = s[0].id;
+    // Validate & resolve subject_id against MySQL subjects table
+    let validSubjectId: string | null = null;
+    const rawSub = body.subjectId || body.subject_id;
+    if (rawSub) {
+      const [s]: any = await db.query('SELECT `id` FROM `subjects` WHERE `id` = ? OR LOWER(`name`) = LOWER(?) OR LOWER(`code`) = LOWER(?) LIMIT 1', [rawSub, rawSub, rawSub]);
+      if (s && s.length > 0) validSubjectId = s[0].id;
+    }
+    if (!validSubjectId && body.subject) {
+      const [s]: any = await db.query('SELECT `id` FROM `subjects` WHERE LOWER(`name`) = LOWER(?) OR LOWER(`code`) = LOWER(?) LIMIT 1', [body.subject, body.subject]);
+      if (s && s.length > 0) validSubjectId = s[0].id;
+    }
+    if (!validSubjectId && existing[0].subject_id) {
+      const [s]: any = await db.query('SELECT `id` FROM `subjects` WHERE `id` = ? LIMIT 1', [existing[0].subject_id]);
+      if (s && s.length > 0) validSubjectId = s[0].id;
     }
 
-    if (!chapterId && body.chapter) {
-      const [c]: any = await db.query('SELECT `id` FROM `chapters` WHERE LOWER(`title`) = LOWER(?) LIMIT 1', [body.chapter]);
-      if (c && c.length > 0) chapterId = c[0].id;
+    // Validate & resolve chapter_id against MySQL chapters table
+    let validChapterId: string | null = null;
+    const rawChap = body.chapterId || body.chapter_id;
+    if (rawChap) {
+      const [c]: any = await db.query('SELECT `id` FROM `chapters` WHERE `id` = ? OR LOWER(`title`) = LOWER(?) OR LOWER(`chapter_code`) = LOWER(?) LIMIT 1', [rawChap, rawChap, rawChap]);
+      if (c && c.length > 0) validChapterId = c[0].id;
+    }
+    if (!validChapterId && body.chapter) {
+      const [c]: any = await db.query('SELECT `id` FROM `chapters` WHERE LOWER(`title`) = LOWER(?) OR LOWER(`chapter_code`) = LOWER(?) LIMIT 1', [body.chapter, body.chapter]);
+      if (c && c.length > 0) validChapterId = c[0].id;
+    }
+    if (!validChapterId && existing[0].chapter_id) {
+      const [c]: any = await db.query('SELECT `id` FROM `chapters` WHERE `id` = ? LIMIT 1', [existing[0].chapter_id]);
+      if (c && c.length > 0) validChapterId = c[0].id;
     }
 
-    const contentJson = body.content !== undefined ? JSON.stringify(body.content) : existing[0].content;
-    const explanationJson = body.explanation !== undefined ? JSON.stringify(body.explanation) : existing[0].explanation;
-    const correctOption = (body.correctOption || body.correct_option || body.correctAnswer || existing[0].correct_option || 'a').toLowerCase();
-    const qCode = body.questionCode || body.question_code;
+    // Safely prepare question code and avoid unique key collision
+    let finalQCode = (body.questionCode || body.question_code || existing[0].question_code || `Q-${Date.now().toString().slice(-6)}`).trim();
+    if (finalQCode !== existing[0].question_code) {
+      const [dup]: any = await db.query('SELECT `id` FROM `questions` WHERE `question_code` = ? AND `id` != ? LIMIT 1', [finalQCode, realId]);
+      if (dup && dup.length > 0) {
+        finalQCode = `${finalQCode}-${Date.now().toString().slice(-4)}`;
+      }
+    }
+
+    const contentJson = body.content !== undefined ? JSON.stringify(body.content) : (existing[0].content || '[]');
+    const explanationJson = body.explanation !== undefined ? JSON.stringify(body.explanation) : (existing[0].explanation || '[]');
+    const correctOption = String(body.correctOption || body.correct_option || body.correctAnswer || existing[0].correct_option || 'a').toLowerCase().trim();
+    const difficulty = body.difficulty || existing[0].difficulty || 'Medium';
+    const marks = isNaN(Number(body.marks)) ? (Number(existing[0].marks) || 4) : Number(body.marks);
+    const negativeMarks = isNaN(Number(body.negativeMarks ?? body.negative_marks)) ? (Number(existing[0].negative_marks) || 1) : Number(body.negativeMarks ?? body.negative_marks);
+    const optionLayout = body.optionLayout || body.option_layout || existing[0].option_layout || 'grid_2x2';
+    const year = Number(body.year) || existing[0].year || 2024;
+    const source = body.source || existing[0].source || 'Question Bank';
+    const rawText = body.rawText !== undefined ? body.rawText : (body.raw_text !== undefined ? body.raw_text : (existing[0].raw_text || ''));
 
     await db.query(
       `UPDATE \`questions\` SET
-         \`question_code\` = COALESCE(?, \`question_code\`),
-         \`subject_id\` = COALESCE(?, \`subject_id\`),
-         \`chapter_id\` = COALESCE(?, \`chapter_id\`),
-         \`question_type\` = COALESCE(?, \`question_type\`),
+         \`question_code\` = ?,
+         \`subject_id\` = ?,
+         \`chapter_id\` = ?,
+         \`question_type\` = ?,
          \`content\` = ?,
          \`explanation\` = ?,
-         \`difficulty\` = COALESCE(?, \`difficulty\`),
-         \`marks\` = COALESCE(?, \`marks\`),
-         \`negative_marks\` = COALESCE(?, \`negative_marks\`),
+         \`difficulty\` = ?,
+         \`marks\` = ?,
+         \`negative_marks\` = ?,
          \`correct_option\` = ?,
-         \`option_layout\` = COALESCE(?, \`option_layout\`),
-         \`year\` = COALESCE(?, \`year\`),
-         \`source\` = COALESCE(?, \`source\`),
-         \`raw_text\` = COALESCE(?, \`raw_text\`),
+         \`option_layout\` = ?,
+         \`year\` = ?,
+         \`source\` = ?,
+         \`raw_text\` = ?,
          \`updated_at\` = CURRENT_TIMESTAMP
        WHERE \`id\` = ?`,
       [
-        qCode,
-        subjectId,
-        chapterId,
-        body.questionType || body.question_type,
+        finalQCode,
+        validSubjectId,
+        validChapterId,
+        body.questionType || body.question_type || existing[0].question_type || 'MCQ_SINGLE',
         contentJson,
         explanationJson,
-        body.difficulty,
-        body.marks,
-        body.negativeMarks ?? body.negative_marks,
+        difficulty,
+        marks,
+        negativeMarks,
         correctOption,
-        body.optionLayout || body.option_layout,
-        body.year,
-        body.source,
-        body.rawText || body.raw_text,
-        id
+        optionLayout,
+        year,
+        source,
+        rawText,
+        realId
       ]
     );
 
     // Update options if provided
     if (Array.isArray(body.options)) {
-      await db.query('DELETE FROM `question_options` WHERE `question_id` = ?', [id]);
+      await db.query('DELETE FROM `question_options` WHERE `question_id` = ?', [realId]);
       for (let i = 0; i < body.options.length; i++) {
         const opt = body.options[i];
-        const optId = opt.id || crypto.randomUUID();
+        const optId = crypto.randomUUID();
         const optKey = (opt.key || opt.option_key || String.fromCharCode(97 + i)).toLowerCase();
         let contentArr = opt.content || [];
         if (!Array.isArray(contentArr)) contentArr = [contentArr];
@@ -487,7 +538,7 @@ questionsRouter.put('/:id', async (req: Request, res: Response, next: NextFuncti
         await db.query(
           `INSERT INTO \`question_options\` (\`id\`, \`question_id\`, \`option_key\`, \`content\`, \`raw_text\`, \`sort_order\`)
            VALUES (?, ?, ?, ?, ?, ?)`,
-          [optId, id, optKey, optContent, optRaw, i + 1]
+          [optId, realId, optKey, optContent, optRaw, i + 1]
         );
       }
     }
@@ -498,17 +549,18 @@ questionsRouter.put('/:id', async (req: Request, res: Response, next: NextFuncti
        LEFT JOIN \`subjects\` s ON q.subject_id = s.id
        LEFT JOIN \`chapters\` c ON q.chapter_id = c.id
        WHERE q.id = ?`,
-      [id]
+      [realId]
     );
 
     const [savedOpts]: any = await db.query(
       'SELECT * FROM `question_options` WHERE `question_id` = ? ORDER BY `sort_order` ASC',
-      [id]
+      [realId]
     );
 
     res.json({ success: true, data: formatQuestion(updated[0], savedOpts || []) });
-  } catch (err) {
-    next(err);
+  } catch (err: any) {
+    console.error('Error updating question in MySQL:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Database error updating question' });
   }
 });
 
@@ -516,9 +568,16 @@ questionsRouter.put('/:id', async (req: Request, res: Response, next: NextFuncti
 questionsRouter.delete('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const { id } = req.params;
-    await db.query('DELETE FROM `questions` WHERE `id` = ?', [id]);
+    const [existing]: any = await db.query('SELECT `id` FROM `questions` WHERE `id` = ? OR `question_code` = ? LIMIT 1', [id, id]);
+    if (existing && existing.length > 0) {
+      const realId = existing[0].id;
+      await db.query('DELETE FROM `question_options` WHERE `question_id` = ?', [realId]);
+      await db.query('DELETE FROM `questions` WHERE `id` = ?', [realId]);
+      return res.json({ success: true, data: { id: realId } });
+    }
     res.json({ success: true, data: { id } });
-  } catch (err) {
-    next(err);
+  } catch (err: any) {
+    console.error('Error deleting question:', err);
+    res.status(500).json({ success: false, error: err?.message || 'Database error deleting question' });
   }
 });
