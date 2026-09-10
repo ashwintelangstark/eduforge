@@ -132,9 +132,11 @@ function formatQuestion(q: any, options: any[] = []) {
 
   const formattedOptions = (options || []).map((opt: any) => {
     const optContent = parseJsonField(opt.content, []);
-    let textVal = opt.raw_text || '';
+    let textVal = opt.raw_text || opt.rawText || '';
     if (!textVal && Array.isArray(optContent)) {
-      textVal = optContent.map((c: any) => c.latex ? `\\(${c.latex}\\)` : (c.html || c.text || '')).join(' ');
+      textVal = optContent.map((c: any) => c.latex ? `\\(${c.latex}\\)` : (c.html || c.text || '')).filter(Boolean).join(' ');
+    } else if (!textVal && typeof optContent === 'string') {
+      textVal = optContent;
     }
 
     // Extract option image from opt.imageUrl, opt.image_url, or optContent blocks
@@ -143,20 +145,23 @@ function formatQuestion(q: any, options: any[] = []) {
       const imgBlock = optContent.find((b: any) => b.type === 'image' || b.imageUrl || b.url || b.src);
       if (imgBlock) optImageUrl = imgBlock.imageUrl || imgBlock.url || imgBlock.src;
     }
-    if (!optImageUrl && opt.raw_text && /<img\s+/i.test(opt.raw_text)) {
-      const m = opt.raw_text.match(/src=["']([^"']+)["']/i);
+    if (!optImageUrl && textVal && /<img\s+/i.test(textVal)) {
+      const m = textVal.match(/src=["']([^"']+)["']/i);
       if (m) optImageUrl = m[1];
     }
 
+    const optKey = opt.option_key ? String(opt.option_key).toLowerCase() : (opt.key ? String(opt.key).toLowerCase() : 'a');
+
     return {
       id: opt.id,
-      key: opt.option_key ? String(opt.option_key).toUpperCase() : 'A',
-      option_key: opt.option_key ? String(opt.option_key).toLowerCase() : 'a',
+      key: optKey.toUpperCase(),
+      option_key: optKey,
       content: optContent,
       rawText: textVal,
+      raw_text: textVal,
       imageUrl: optImageUrl,
       image_url: optImageUrl,
-      isCorrect: String(q.correct_option || '').toLowerCase() === String(opt.option_key || '').toLowerCase()
+      isCorrect: String(q.correct_option || '').toLowerCase() === optKey
     };
   });
 
@@ -383,12 +388,26 @@ questionsRouter.post('/', async (req: Request, res: Response, next: NextFunction
         const optKey = (opt.key || opt.option_key || String.fromCharCode(97 + i)).toLowerCase();
         let contentArr = opt.content || [];
         if (!Array.isArray(contentArr)) contentArr = [contentArr];
-        const optImg = opt.imageUrl || opt.image_url;
+        let optRaw = opt.rawText || opt.raw_text || '';
+        if (!optRaw && Array.isArray(contentArr)) {
+          optRaw = contentArr.map((c: any) => c.latex ? `\\(${c.latex}\\)` : (c.html || c.text || '')).filter(Boolean).join(' ');
+        }
+        if (contentArr.length === 0 && optRaw) {
+          contentArr = [{ type: 'text', html: optRaw, text: optRaw }];
+        }
+        let optImg = opt.imageUrl || opt.image_url;
+        if (!optImg && Array.isArray(contentArr)) {
+          const imgBlock = contentArr.find((b: any) => b.type === 'image' || b.imageUrl || b.url || b.src);
+          if (imgBlock) optImg = imgBlock.imageUrl || imgBlock.url || imgBlock.src;
+        }
+        if (!optImg && optRaw && /<img\s+/i.test(optRaw)) {
+          const m = optRaw.match(/src=["']([^"']+)["']/i);
+          if (m) optImg = m[1];
+        }
         if (optImg && !contentArr.some((c: any) => c.type === 'image')) {
           contentArr.push({ type: 'image', url: optImg, src: optImg, imageUrl: optImg });
         }
         const optContent = JSON.stringify(contentArr);
-        const optRaw = opt.rawText || opt.raw_text || '';
         await db.query(
           `INSERT INTO \`question_options\` (\`id\`, \`question_id\`, \`option_key\`, \`content\`, \`raw_text\`, \`sort_order\`)
            VALUES (?, ?, ?, ?, ?, ?)`,
@@ -529,12 +548,26 @@ questionsRouter.put('/:id', async (req: Request, res: Response, next: NextFuncti
         const optKey = (opt.key || opt.option_key || String.fromCharCode(97 + i)).toLowerCase();
         let contentArr = opt.content || [];
         if (!Array.isArray(contentArr)) contentArr = [contentArr];
-        const optImg = opt.imageUrl || opt.image_url;
+        let optRaw = opt.rawText || opt.raw_text || '';
+        if (!optRaw && Array.isArray(contentArr)) {
+          optRaw = contentArr.map((c: any) => c.latex ? `\\(${c.latex}\\)` : (c.html || c.text || '')).filter(Boolean).join(' ');
+        }
+        if (contentArr.length === 0 && optRaw) {
+          contentArr = [{ type: 'text', html: optRaw, text: optRaw }];
+        }
+        let optImg = opt.imageUrl || opt.image_url;
+        if (!optImg && Array.isArray(contentArr)) {
+          const imgBlock = contentArr.find((b: any) => b.type === 'image' || b.imageUrl || b.url || b.src);
+          if (imgBlock) optImg = imgBlock.imageUrl || imgBlock.url || imgBlock.src;
+        }
+        if (!optImg && optRaw && /<img\s+/i.test(optRaw)) {
+          const m = optRaw.match(/src=["']([^"']+)["']/i);
+          if (m) optImg = m[1];
+        }
         if (optImg && !contentArr.some((c: any) => c.type === 'image')) {
           contentArr.push({ type: 'image', url: optImg, src: optImg, imageUrl: optImg });
         }
         const optContent = JSON.stringify(contentArr);
-        const optRaw = opt.rawText || opt.raw_text || '';
         await db.query(
           `INSERT INTO \`question_options\` (\`id\`, \`question_id\`, \`option_key\`, \`content\`, \`raw_text\`, \`sort_order\`)
            VALUES (?, ?, ?, ?, ?, ?)`,

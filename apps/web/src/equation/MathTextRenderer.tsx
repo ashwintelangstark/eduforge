@@ -17,6 +17,21 @@ export function resolveImageUrl(src: string | undefined): string {
     return imgSrc;
   }
 
+  // Handle /assets/raw/... or assets/raw/...
+  if (imgSrc.startsWith('/assets/raw/') || imgSrc.startsWith('assets/raw/')) {
+    const clean = imgSrc.startsWith('/') ? imgSrc : `/${imgSrc}`;
+    if (typeof window !== 'undefined' && window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+      return `/api${clean}`;
+    }
+    return clean;
+  }
+
+  // Handle /api/assets/raw/... or api/assets/raw/...
+  if (imgSrc.startsWith('/api/assets/raw/') || imgSrc.startsWith('api/assets/raw/')) {
+    const clean = imgSrc.startsWith('/') ? imgSrc : `/${imgSrc}`;
+    return clean;
+  }
+
   // Handle local server uploads (/uploads/... or uploads/...)
   if (imgSrc.startsWith('/uploads/') || imgSrc.startsWith('uploads/')) {
     const clean = imgSrc.startsWith('/') ? imgSrc : `/${imgSrc}`;

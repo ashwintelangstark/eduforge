@@ -535,84 +535,103 @@ export const CollegeExamPaper: React.FC<CollegeExamPaperProps> = ({
 
                       {/* MCQ Options with College Exam Format */}
                       <div className="mt-1 pl-3.5">
-                        {isUltraShort ? (
-                          // Ultra-compact 4 in one line: (A) ... (B) ... (C) ... (D) ...
-                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                            {sortedOpts.map((opt, oIdx) => {
-                              const key = (opt.key || String.fromCharCode(65 + oIdx)).toUpperCase();
-                              const isCorrect = isAnswerKeyMode && (key === targetOptKey || opt.isCorrect);
-                              const optText = opt.rawText || opt.text || opt.label || '';
+                        {(() => {
+                          const getOptText = (opt: any) => {
+                            if (opt.rawText && String(opt.rawText).trim()) return String(opt.rawText).trim();
+                            if (opt.raw_text && String(opt.raw_text).trim()) return String(opt.raw_text).trim();
+                            if (opt.text && String(opt.text).trim()) return String(opt.text).trim();
+                            if (opt.label && String(opt.label).trim()) return String(opt.label).trim();
+                            if (typeof opt.content === 'string' && opt.content.trim()) return opt.content.trim();
+                            if (Array.isArray(opt.content)) {
+                              return opt.content.map((c: any) => c.latex ? `\\(${c.latex}\\)` : (c.html || c.text || '')).filter(Boolean).join(' ');
+                            }
+                            return '';
+                          };
 
-                              return (
-                                <div key={opt.id || oIdx} className={`flex items-baseline gap-1 ${isCorrect ? 'font-bold text-emerald-800' : ''}`}>
-                                  <span className="font-bold">({key})</span>
-                                  <MathTextRenderer text={optText} />
-                                  {isCorrect && <Check className="inline w-3 h-3 text-emerald-600 stroke-[3] ml-0.5" />}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : isShort2x2 ? (
-                          // 2x2 Grid (Ideal for diagram options and short options)
-                          <div className="grid grid-cols-2 gap-x-3 gap-y-1">
-                            {sortedOpts.map((opt, oIdx) => {
-                              const key = (opt.key || String.fromCharCode(65 + oIdx)).toUpperCase();
-                              const isCorrect = isAnswerKeyMode && (key === targetOptKey || opt.isCorrect);
-                              const optText = opt.rawText || opt.text || opt.label || '';
+                          if (isUltraShort) {
+                            return (
+                              <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                                {sortedOpts.map((opt, oIdx) => {
+                                  const key = (opt.key || String.fromCharCode(65 + oIdx)).toUpperCase();
+                                  const isCorrect = isAnswerKeyMode && (key === targetOptKey || opt.isCorrect);
+                                  const optText = getOptText(opt);
 
-                              return (
-                                <div key={opt.id || oIdx} className={`flex items-start gap-1 ${hasOptImages ? 'p-1 border border-slate-200 rounded-sm bg-white' : 'truncate'} ${isCorrect ? 'font-bold text-emerald-800 bg-emerald-50 px-1 rounded-xs' : ''}`}>
-                                  <span className="font-bold shrink-0">({key})</span>
-                                  <div className={`flex-1 ${hasOptImages ? 'flex justify-center items-center max-h-20 overflow-hidden' : 'truncate'}`}>
-                                    <MathTextRenderer text={optText} />
-                                  </div>
-                                  {isCorrect && <Check className="inline w-3 h-3 text-emerald-600 stroke-[3] ml-0.5 shrink-0" />}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        ) : (
-                          // Stacked 1 per line: (A) ... \n (B) ...
-                          <div className="space-y-0.5">
-                            {sortedOpts.map((opt, oIdx) => {
-                              const key = (opt.key || String.fromCharCode(65 + oIdx)).toUpperCase();
-                              const isCorrect = isAnswerKeyMode && (key === targetOptKey || opt.isCorrect);
-                              const optText = opt.rawText || opt.text || opt.label || '';
+                                  return (
+                                    <div key={opt.id || oIdx} className={`flex items-baseline gap-1 ${isCorrect ? 'font-bold text-emerald-800' : ''}`}>
+                                      <span className="font-bold">({key})</span>
+                                      <MathTextRenderer text={optText} />
+                                      {isCorrect && <Check className="inline w-3 h-3 text-emerald-600 stroke-[3] ml-0.5" />}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          }
 
-                              const optImg = (opt as any).imageUrl || (opt as any).image_url;
-                              return (
-                                <div key={opt.id || oIdx} className={`flex items-start gap-1.5 ${isCorrect ? 'font-bold text-emerald-800 bg-emerald-50/70 px-1 rounded' : ''}`}>
-                                  <span className="font-bold shrink-0">({key})</span>
-                                  <div className="flex-1">
-                                    <MathTextRenderer text={optText} />
-                                    {optImg && (
-                                      <div className="my-1">
-                                        <img
-                                          src={resolveImageUrl(optImg)}
-                                          alt={`Option ${key}`}
-                                          className="max-h-24 max-w-[160px] object-contain border border-slate-200 p-0.5 rounded bg-white inline-block shadow-2xs"
-                                          onError={(e) => {
-                                            const target = e.currentTarget;
-                                            if (!target.dataset.triedFallback) {
-                                              target.dataset.triedFallback = 'true';
-                                              const cur = target.src;
-                                              if (cur.includes('/uploads/') && !cur.includes('/api/uploads/')) {
-                                                target.src = cur.replace('/uploads/', '/api/uploads/');
-                                                return;
-                                              }
-                                            }
-                                            target.style.display = 'none';
-                                          }}
-                                        />
+                          if (isShort2x2) {
+                            return (
+                              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                                {sortedOpts.map((opt, oIdx) => {
+                                  const key = (opt.key || String.fromCharCode(65 + oIdx)).toUpperCase();
+                                  const isCorrect = isAnswerKeyMode && (key === targetOptKey || opt.isCorrect);
+                                  const optText = getOptText(opt);
+
+                                  return (
+                                    <div key={opt.id || oIdx} className={`flex items-start gap-1 ${hasOptImages ? 'p-1 border border-slate-200 rounded-sm bg-white' : 'truncate'} ${isCorrect ? 'font-bold text-emerald-800 bg-emerald-50 px-1 rounded-xs' : ''}`}>
+                                      <span className="font-bold shrink-0">({key})</span>
+                                      <div className={`flex-1 ${hasOptImages ? 'flex justify-center items-center max-h-20 overflow-hidden' : 'truncate'}`}>
+                                        <MathTextRenderer text={optText} />
                                       </div>
-                                    )}
+                                      {isCorrect && <Check className="inline w-3 h-3 text-emerald-600 stroke-[3] ml-0.5 shrink-0" />}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          }
+
+                          return (
+                            <div className="space-y-0.5">
+                              {sortedOpts.map((opt, oIdx) => {
+                                const key = (opt.key || String.fromCharCode(65 + oIdx)).toUpperCase();
+                                const isCorrect = isAnswerKeyMode && (key === targetOptKey || opt.isCorrect);
+                                const optText = getOptText(opt);
+                                const optImg = (opt as any).imageUrl || (opt as any).image_url;
+
+                                return (
+                                  <div key={opt.id || oIdx} className={`flex items-start gap-1.5 ${isCorrect ? 'font-bold text-emerald-800 bg-emerald-50/70 px-1 rounded' : ''}`}>
+                                    <span className="font-bold shrink-0">({key})</span>
+                                    <div className="flex-1">
+                                      <MathTextRenderer text={optText} />
+                                      {optImg && (
+                                        <div className="my-1">
+                                          <img
+                                            src={resolveImageUrl(optImg)}
+                                            alt={`Option ${key}`}
+                                            className="max-h-24 max-w-[160px] object-contain border border-slate-200 p-0.5 rounded bg-white inline-block shadow-2xs"
+                                            onError={(e) => {
+                                              const target = e.currentTarget;
+                                              if (!target.dataset.triedFallback) {
+                                                target.dataset.triedFallback = 'true';
+                                                const cur = target.src;
+                                                if (cur.includes('/uploads/') && !cur.includes('/api/uploads/')) {
+                                                  target.src = cur.replace('/uploads/', '/api/uploads/');
+                                                  return;
+                                                }
+                                              }
+                                              target.style.display = 'none';
+                                            }}
+                                          />
+                                        </div>
+                                      )}
+                                    </div>
+                                    {isCorrect && <Check className="inline w-3.5 h-3.5 text-emerald-600 stroke-[3] ml-1 shrink-0" />}
                                   </div>
-                                  {isCorrect && <Check className="inline w-3.5 h-3.5 text-emerald-600 stroke-[3] ml-1 shrink-0" />}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
+                                );
+                              })}
+                            </div>
+                          );
+                        })()}
                       </div>
                     </div>
                   );

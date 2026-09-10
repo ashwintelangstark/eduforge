@@ -119,28 +119,32 @@ questionBankRouter.get('/', async (req: Request, res: Response, next: NextFuncti
         imageUrl: diagramUrl || undefined,
         options: rawOpts.map((opt: any) => {
           const optContent = parseJsonField(opt.content, []);
-          let textVal = opt.raw_text || '';
+          let textVal = opt.raw_text || opt.rawText || '';
           if (!textVal && Array.isArray(optContent)) {
-            textVal = optContent.map((c: any) => c.latex ? `\\(${c.latex}\\)` : (c.html || c.text || '')).join(' ');
+            textVal = optContent.map((c: any) => c.latex ? `\\(${c.latex}\\)` : (c.html || c.text || '')).filter(Boolean).join(' ');
+          } else if (!textVal && typeof optContent === 'string') {
+            textVal = optContent;
           }
           let optImageUrl = opt.imageUrl || opt.image_url || undefined;
           if (!optImageUrl && Array.isArray(optContent)) {
             const imgBlock = optContent.find((b: any) => b.type === 'image' || b.imageUrl || b.url || b.src);
             if (imgBlock) optImageUrl = imgBlock.imageUrl || imgBlock.url || imgBlock.src;
           }
-          if (!optImageUrl && opt.raw_text && /<img\s+/i.test(opt.raw_text)) {
-            const m = opt.raw_text.match(/src=["']([^"']+)["']/i);
+          if (!optImageUrl && textVal && /<img\s+/i.test(textVal)) {
+            const m = textVal.match(/src=["']([^"']+)["']/i);
             if (m) optImageUrl = m[1];
           }
+          const optKey = opt.option_key ? opt.option_key.toLowerCase() : (opt.key ? opt.key.toLowerCase() : 'a');
           return {
             id: opt.id,
-            key: opt.option_key ? opt.option_key.toUpperCase() : 'A',
-            option_key: opt.option_key || 'a',
+            key: optKey.toUpperCase(),
+            option_key: optKey,
             rawText: textVal,
+            raw_text: textVal,
             content: optContent,
             imageUrl: optImageUrl,
             image_url: optImageUrl,
-            isCorrect: (q.correct_option || '').toLowerCase() === (opt.option_key || '').toLowerCase()
+            isCorrect: (q.correct_option || '').toLowerCase() === optKey
           };
         }),
         createdAt: q.created_at,

@@ -234,7 +234,8 @@ assetsRouter.delete('/:id', async (req: Request, res: Response, next: NextFuncti
 
 // GET /api/assets/raw/:filename or /api/assets/uploads/:filename - Direct file streaming
 assetsRouter.get(['/raw/:filename', '/uploads/:filename'], (req: Request, res: Response, next: NextFunction) => {
-  const filename = path.basename(req.params.filename);
+  const rawParam = req.params.filename;
+  const filename = path.basename(Array.isArray(rawParam) ? rawParam[0] : String(rawParam || ''));
   for (const dir of possibleUploadDirs) {
     const fullPath = path.join(dir, filename);
     if (fs.existsSync(fullPath)) {

@@ -44,14 +44,37 @@ const EditableOptionItem: React.FC<{
   onRemoveOption,
   textColorClass
 }) => {
+  const getOptionTextContent = (option: QuestionOption): string => {
+    if (option.rawText && option.rawText.trim()) return option.rawText.trim();
+    if ((option as any).raw_text && String((option as any).raw_text).trim()) return String((option as any).raw_text).trim();
+    if (typeof (option as any).content === 'string' && (option as any).content.trim()) return (option as any).content.trim();
+    if (Array.isArray(option.content)) {
+      const extracted = (option.content as any[])
+        .map(c => {
+          if (!c) return '';
+          if (c.latex) return `\\(${c.latex}\\)`;
+          return c.html || c.text || '';
+        })
+        .filter(Boolean)
+        .join(' ');
+      if (extracted.trim()) return extracted.trim();
+    }
+    if (option.content && typeof option.content === 'object') {
+      const obj = option.content as any;
+      if (obj.latex) return `\\(${obj.latex}\\)`;
+      if (obj.html || obj.text) return obj.html || obj.text;
+    }
+    return '';
+  };
+
   const [isEditing, setIsEditing] = useState(false);
-  const [optText, setOptText] = useState(opt.rawText || '');
+  const [optText, setOptText] = useState(getOptionTextContent(opt));
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setOptText(opt.rawText || '');
-  }, [opt.rawText]);
+    setOptText(getOptionTextContent(opt));
+  }, [opt.rawText, (opt as any).raw_text, opt.content]);
 
   // Drop handler: drop science formulas/constants directly into this option
   const handleDropOnOption = (e: React.DragEvent) => {
@@ -68,7 +91,7 @@ const EditableOptionItem: React.FC<{
       }
 
       if (inserted && onUpdateOptionText) {
-        const current = opt.rawText || '';
+        const current = getOptionTextContent(opt);
         const updated = current ? `${current} ${inserted}` : inserted;
         setOptText(updated);
         onUpdateOptionText(opt.id, updated);
@@ -80,7 +103,7 @@ const EditableOptionItem: React.FC<{
 
   const handleCommitText = () => {
     setIsEditing(false);
-    if (onUpdateOptionText && optText !== opt.rawText) {
+    if (onUpdateOptionText && optText !== getOptionTextContent(opt)) {
       onUpdateOptionText(opt.id, optText);
     }
   };
@@ -137,17 +160,16 @@ const EditableOptionItem: React.FC<{
     }
   };
 
-  const getOptionTextContent = (option: QuestionOption): string => {
-    if (option.rawText && option.rawText.trim()) return option.rawText.trim();
-    if (typeof option.content === 'string') return option.content;
-    if (Array.isArray(option.content)) {
-      return JSON.stringify(option.content);
-    }
-    if (option.content && typeof option.content === 'object') {
-      return JSON.stringify(option.content);
-    }
-    return '';
-  };
+  // Extract option image from opt.imageUrl, opt.image_url, opt.content, or opt.rawText
+  let rawOptImgUrl = opt.imageUrl || (opt as any).image_url;
+  if (!rawOptImgUrl && Array.isArray(opt.content)) {
+    const imgBlock = (opt.content as any[]).find(c => c.type === 'image' || c.imageUrl || c.url || c.src);
+    if (imgBlock) rawOptImgUrl = imgBlock.imageUrl || imgBlock.url || imgBlock.src;
+  }
+  if (!rawOptImgUrl && opt.rawText && /<img\s+/i.test(opt.rawText)) {
+    const m = opt.rawText.match(/src=["']([^"']+)["']/i);
+    if (m) rawOptImgUrl = m[1];
+  }
 
   return (
     <div
@@ -171,9 +193,8 @@ const EditableOptionItem: React.FC<{
 
       <div className="flex-1 flex flex-col md:flex-row items-start md:items-center gap-2.5 min-w-0">
         {/* Option Image Rendering (Rendered side-by-side with statement text) */}
-        {(opt.imageUrl || (opt as any).image_url) && (() => {
-          const rawUrl = opt.imageUrl || (opt as any).image_url;
-          const imgSrc = resolveImageUrl(rawUrl);
+        {rawOptImgUrl && (() => {
+          const imgSrc = resolveImageUrl(rawOptImgUrl);
           return (
             <div className="relative group/optimg shrink-0 my-0.5">
               <img

@@ -239,23 +239,42 @@ export const CreateQuestionPage: React.FC<CreateQuestionPageProps> = ({
         ...(initialImg ? [{ id: 'blk-3', type: 'image' as const, imageUrl: initialImg }] : [])
       ]);
       const loadedOpts = (initialQuestion.options || []).map((opt, idx) => {
-        let textVal = opt.rawText || '';
+        let textVal = opt.rawText || (opt as any).raw_text || '';
         if (!textVal && typeof opt.content === 'string') textVal = opt.content;
         if (!textVal && Array.isArray(opt.content)) {
           textVal = (opt.content as any[])
-            .map(c => c.latex ? `\\(${c.latex}\\)` : (c.html || c.text || ''))
+            .map(c => {
+              if (!c) return '';
+              if (c.latex) return `\\(${c.latex}\\)`;
+              return c.html || c.text || '';
+            })
+            .filter(Boolean)
             .join(' ');
         }
+        let optImg = opt.imageUrl || (opt as any).image_url;
+        if (!optImg && Array.isArray(opt.content)) {
+          const imgBlock = (opt.content as any[]).find(c => c.type === 'image' || c.imageUrl || c.url || c.src);
+          if (imgBlock) optImg = imgBlock.imageUrl || imgBlock.url || imgBlock.src;
+        }
+        if (!optImg && textVal && /<img\s+/i.test(textVal)) {
+          const m = textVal.match(/src=["']([^"']+)["']/i);
+          if (m) optImg = m[1];
+        }
+        const optKey = (opt.key || (opt as any).option_key || String.fromCharCode(65 + idx)).toUpperCase();
+        const isCorr = Boolean(
+          opt.isCorrect ||
+          (initialQuestion.correctAnswer && initialQuestion.correctAnswer.toUpperCase() === optKey) ||
+          ((initialQuestion as any).correct_option && (initialQuestion as any).correct_option.toUpperCase() === optKey)
+        );
         return {
           id: opt.id || `opt-${idx + 1}`,
-          key: opt.key ? opt.key.toUpperCase() : String.fromCharCode(65 + idx),
+          key: optKey,
           rawText: textVal,
-          imageUrl: opt.imageUrl || (opt as any).image_url || undefined,
-          isCorrect: Boolean(
-            opt.isCorrect ||
-            (initialQuestion.correctAnswer && initialQuestion.correctAnswer.toUpperCase() === (opt.key || String.fromCharCode(65 + idx)).toUpperCase())
-          ),
-          content: opt.content || []
+          raw_text: textVal,
+          imageUrl: optImg || undefined,
+          image_url: optImg || undefined,
+          isCorrect: isCorr,
+          content: opt.content || [{ type: 'text', html: textVal, text: textVal }]
         };
       });
 
@@ -265,7 +284,9 @@ export const CreateQuestionPage: React.FC<CreateQuestionPageProps> = ({
           id: `opt-${idx + 1}`,
           key: String.fromCharCode(65 + idx),
           rawText: '',
+          raw_text: '',
           imageUrl: undefined,
+          image_url: undefined,
           isCorrect: idx === 0,
           content: []
         });
@@ -459,23 +480,29 @@ export const CreateQuestionPage: React.FC<CreateQuestionPageProps> = ({
       isSystem: false,
       isPublished: false,
       options: options.map((o, idx) => {
-        const cleanedOptRaw = cleanHtmlTags(o.rawText || '');
-        const optImgMatch = (o.rawText || '').match(/<img[^>]*src=["']([^"']+)["']/i);
+        const rawTextVal = o.rawText || (o as any).raw_text || '';
+        const cleanedOptRaw = cleanHtmlTags(rawTextVal);
+        const optImgMatch = rawTextVal.match(/<img[^>]*src=["']([^"']+)["']/i);
         const optImgUrl = optImgMatch ? optImgMatch[1] : (o.imageUrl || (o as any).image_url || undefined);
-        const optContent: any[] = [{ type: 'text', html: cleanedOptRaw }];
+        const optKey = (o.key || (o as any).option_key || String.fromCharCode(65 + idx)).toUpperCase();
+        const optContent: any[] = [{ type: 'text', html: cleanedOptRaw, text: cleanedOptRaw }];
         if (optImgUrl) {
           optContent.push({ type: 'image', url: optImgUrl, src: optImgUrl, imageUrl: optImgUrl });
         }
         return {
           ...o,
-          key: o.key || String.fromCharCode(65 + idx),
+          key: optKey,
+          option_key: optKey.toLowerCase(),
           rawText: cleanedOptRaw,
+          raw_text: cleanedOptRaw,
           imageUrl: optImgUrl,
           image_url: optImgUrl,
           content: optContent
         };
       }),
-      correctAnswer: correctOpt?.key || 'A',
+      correctAnswer: (correctOpt?.key || 'A').toUpperCase(),
+      correctOption: (correctOpt?.key || 'a').toLowerCase(),
+      correct_option: (correctOpt?.key || 'a').toLowerCase(),
       explanationText: cleanHtmlTags(solutionText)
     } as any;
 
@@ -583,8 +610,13 @@ export const CreateQuestionPage: React.FC<CreateQuestionPageProps> = ({
     difficulty,
     marks,
     negativeMarks,
-    options,
-    correctAnswer: options.find(o => o.isCorrect)?.key || 'A',
+    options: options.map((o, idx) => ({
+      ...o,
+      key: (o.key || String.fromCharCode(65 + idx)).toUpperCase(),
+      rawText: o.rawText || (o as any).raw_text || '',
+      imageUrl: o.imageUrl || (o as any).image_url || undefined
+    })),
+    correctAnswer: (options.find(o => o.isCorrect)?.key || 'A').toUpperCase(),
     explanationText: solutionText,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString()
