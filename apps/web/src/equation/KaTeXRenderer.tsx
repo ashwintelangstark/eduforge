@@ -12,6 +12,186 @@ interface KaTeXRendererProps {
 const katexHtmlCache = new Map<string, string>();
 
 /**
+ * Standard dictionary mapping Unicode Greek letters, math operators, arrows,
+ * superscripts, and subscripts into LaTeX commands so KaTeX renders them perfectly
+ * on every browser, platform, and operating system.
+ */
+export const UNICODE_TO_LATEX_MAP: Record<string, string> = {
+  // Greek lowercase
+  'α': '\\alpha ',
+  'β': '\\beta ',
+  'γ': '\\gamma ',
+  'δ': '\\delta ',
+  'ε': '\\epsilon ',
+  'ϵ': '\\varepsilon ',
+  'ζ': '\\zeta ',
+  'η': '\\eta ',
+  'θ': '\\theta ',
+  'ϑ': '\\vartheta ',
+  'ι': '\\iota ',
+  'κ': '\\kappa ',
+  'λ': '\\lambda ',
+  'μ': '\\mu ',
+  'ν': '\\nu ',
+  'ξ': '\\xi ',
+  'π': '\\pi ',
+  'ϖ': '\\varpi ',
+  'ρ': '\\rho ',
+  'ϱ': '\\varrho ',
+  'σ': '\\sigma ',
+  'ς': '\\varsigma ',
+  'τ': '\\tau ',
+  'υ': '\\upsilon ',
+  'φ': '\\phi ',
+  'ϕ': '\\varphi ',
+  'χ': '\\chi ',
+  'ψ': '\\psi ',
+  'ω': '\\omega ',
+
+  // Greek uppercase
+  'Γ': '\\Gamma ',
+  'Δ': '\\Delta ',
+  'Θ': '\\Theta ',
+  'Λ': '\\Lambda ',
+  'Ξ': '\\Xi ',
+  'Π': '\\Pi ',
+  'Σ': '\\Sigma ',
+  'Υ': '\\Upsilon ',
+  'Φ': '\\Phi ',
+  'Ψ': '\\Psi ',
+  'Ω': '\\Omega ',
+
+  // Math Operators & Relations
+  '±': '\\pm ',
+  '∓': '\\mp ',
+  '≤': '\\le ',
+  '≥': '\\ge ',
+  '≠': '\\ne ',
+  '≈': '\\approx ',
+  '≡': '\\equiv ',
+  '∝': '\\propto ',
+  '×': '\\times ',
+  '÷': '\\div ',
+  '·': '\\cdot ',
+  '•': '\\cdot ',
+  '∙': '\\cdot ',
+  '°': '^\\circ ',
+  '℃': '^\\circ\\text{C} ',
+  '℉': '^\\circ\\text{F} ',
+  'Å': '\\mathring{\\text{A}} ',
+  'µ': '\\mu ',
+  'Ω': '\\Omega ',
+  '∞': '\\infty ',
+  '√': '\\sqrt ',
+  '∑': '\\sum ',
+  '∏': '\\prod ',
+  '∫': '\\int ',
+  '∬': '\\iint ',
+  '∭': '\\iiint ',
+  '∮': '\\oint ',
+  '∂': '\\partial ',
+  '∇': '\\nabla ',
+  '∈': '\\in ',
+  '∉': '\\notin ',
+  '⊂': '\\subset ',
+  '⊆': '\\subseteq ',
+  '⊃': '\\supset ',
+  '⊇': '\\supseteq ',
+  '∪': '\\cup ',
+  '∩': '\\cap ',
+  '∅': '\\emptyset ',
+  '∀': '\\forall ',
+  '∃': '\\exists ',
+  '∴': '\\therefore ',
+  '∵': '\\because ',
+  '∠': '\\angle ',
+  '⊥': '\\perp ',
+  '∥': '\\parallel ',
+  '∼': '\\sim ',
+  '≅': '\\cong ',
+
+  // Arrows
+  '→': '\\to ',
+  '⟶': '\\to ',
+  '←': '\\leftarrow ',
+  '⟵': '\\leftarrow ',
+  '↔': '\\leftrightarrow ',
+  '⟷': '\\leftrightarrow ',
+  '⇒': '\\Rightarrow ',
+  '⟹': '\\Rightarrow ',
+  '⇐': '\\Leftarrow ',
+  '⟸': '\\Leftarrow ',
+  '⇔': '\\Leftrightarrow ',
+  '⟺': '\\Leftrightarrow ',
+  '⇌': '\\rightleftharpoons ',
+  '⇋': '\\rightleftharpoons ',
+  '↑': '\\uparrow ',
+  '↓': '\\downarrow ',
+
+  // Superscripts
+  '⁰': '^0',
+  '¹': '^1',
+  '²': '^2',
+  '³': '^3',
+  '⁴': '^4',
+  '⁵': '^5',
+  '⁶': '^6',
+  '⁷': '^7',
+  '⁸': '^8',
+  '⁹': '^9',
+  '⁺': '^+',
+  '⁻': '^-',
+
+  // Subscripts
+  '₀': '_0',
+  '₁': '_1',
+  '₂': '_2',
+  '₃': '_3',
+  '₄': '_4',
+  '₅': '_5',
+  '₆': '_6',
+  '₇': '_7',
+  '₈': '_8',
+  '₉': '_9',
+  '₊': '_+',
+  '₋': '_-'
+};
+
+const UNICODE_REGEX = new RegExp(
+  Object.keys(UNICODE_TO_LATEX_MAP)
+    .map(k => k.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'))
+    .join('|'),
+  'g'
+);
+
+export const KATEX_RENDER_OPTIONS: katex.KatexOptions = {
+  throwOnError: false,
+  strict: false,
+  trust: true,
+  output: 'htmlAndMathml',
+  macros: {
+    '\\degree': '^\\circ',
+    '\\celsius': '^\\circ\\text{C}',
+    '\\micro': '\\mu',
+    '\\ohm': '\\Omega',
+    '\\angstrom': '\\mathring{\\text{A}}',
+    '\\AA': '\\mathring{\\text{A}}',
+    '\\unit': '\\mathrm',
+    '\\pu': '\\mathrm',
+    '\\ce': '\\mathrm',
+    '\\boldsymbol': '\\mathbf',
+    '\\textsubscript': '_',
+    '\\textsuperscript': '^',
+    '\\le': '\\leq',
+    '\\ge': '\\geq',
+    '\\to': '\\rightarrow',
+    '\\rarr': '\\rightarrow',
+    '\\larr': '\\leftarrow',
+    '\\lrarr': '\\leftrightarrow'
+  }
+};
+
+/**
  * Robust LaTeX sanitizer before passing to KaTeX
  */
 export function sanitizeLatexFormula(latex: string): string {
@@ -32,6 +212,9 @@ export function sanitizeLatexFormula(latex: string): string {
        .replace(/&quot;/g, '"')
        .replace(/&#39;/g, "'")
        .replace(/&nbsp;/g, ' ');
+
+  // Convert any embedded Unicode Greek/math characters to KaTeX commands
+  s = s.replace(UNICODE_REGEX, match => UNICODE_TO_LATEX_MAP[match] || match);
 
   // Normalize excessive backslashes e.g. \\mathrm -> \mathrm, \\frac -> \frac
   s = s.replace(/\\\\([a-zA-Z]+)/g, '\\$1');
@@ -76,14 +259,12 @@ const KaTeXRendererComponent: React.FC<KaTeXRendererProps> = ({
 
     try {
       const rendered = katex.renderToString(cleanMath, {
-        displayMode: block,
-        throwOnError: false,
-        output: 'html' // 'html' produces crisp KaTeX layout
+        ...KATEX_RENDER_OPTIONS,
+        displayMode: block
       });
 
       // If KaTeX produced an error span (class katex-error), attempt a sanitized fallback
       if (rendered.includes('katex-error')) {
-        // Try simplified plain text/math rendering
         const simplified = cleanMath
           .replace(/\\(mathrm|mathbf|mathit|text|textsubscript|textsuperscript)\{([^{}]*)\}/g, '$2')
           .replace(/\\,/g, ' ')
@@ -93,9 +274,8 @@ const KaTeXRendererComponent: React.FC<KaTeXRendererProps> = ({
 
         try {
           const secondTry = katex.renderToString(simplified, {
-            displayMode: block,
-            throwOnError: false,
-            output: 'html'
+            ...KATEX_RENDER_OPTIONS,
+            displayMode: block
           });
           if (!secondTry.includes('katex-error')) {
             katexHtmlCache.set(cacheKey, secondTry);

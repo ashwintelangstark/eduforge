@@ -181,16 +181,22 @@ questionBankRouter.get('/', async (req: Request, res: Response, next: NextFuncti
 // GET /api/question-bank/:id
 questionBankRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { id } = req.params;
+    const rawId = (req.params.id || '').trim();
+    if (!rawId) {
+      return res.status(404).json({
+        success: false,
+        error: { code: 'QUESTION_NOT_FOUND', message: 'Question not found' }
+      });
+    }
 
     const [rows]: any = await db.query(
       `SELECT q.*, s.name AS subject_name, c.title AS chapter_title 
        FROM \`questions\` q
        LEFT JOIN \`subjects\` s ON q.subject_id = s.id
        LEFT JOIN \`chapters\` c ON q.chapter_id = c.id
-       WHERE q.id = ? OR q.question_code = ?
+       WHERE q.id = ? OR q.question_code = ? OR LOWER(q.id) = LOWER(?) OR LOWER(q.question_code) = LOWER(?)
        LIMIT 1`,
-      [id, id]
+      [rawId, rawId, rawId, rawId]
     );
 
     if (!rows || rows.length === 0) {

@@ -298,16 +298,19 @@ questionsRouter.get('/', async (req: Request, res: Response, next: NextFunction)
 // GET /api/questions/:id - Single question detail
 questionsRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { id } = req.params;
+    const rawId = (req.params.id || '').trim();
+    if (!rawId) {
+      return res.status(404).json({ success: false, error: 'Question not found' });
+    }
 
     const [rows]: any = await db.query(
       `SELECT q.*, s.name AS subject_name, c.title AS chapter_title 
        FROM \`questions\` q
        LEFT JOIN \`subjects\` s ON q.subject_id = s.id
        LEFT JOIN \`chapters\` c ON q.chapter_id = c.id
-       WHERE q.id = ? OR q.question_code = ?
+       WHERE q.id = ? OR q.question_code = ? OR LOWER(q.id) = LOWER(?) OR LOWER(q.question_code) = LOWER(?)
        LIMIT 1`,
-      [id, id]
+      [rawId, rawId, rawId, rawId]
     );
 
     if (!rows || rows.length === 0) {
@@ -437,20 +440,41 @@ questionsRouter.post('/', async (req: Request, res: Response, next: NextFunction
   }
 });
 
-// PUT /api/questions/:id - Update existing question in MySQL
+// PUT /api/questions/:id - Update existing question in MySQL (with auto upsert if question doesn't exist)
 questionsRouter.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { id } = req.params;
+    const rawId = (req.params.id || '').trim();
     const body = await dumpBase64Images(req.body);
+    const bodyId = (body.id || '').trim();
+    const bodyCode = (body.questionCode || body.question_code || '').trim();
 
-    const [existing]: any = await db.query('SELECT * FROM `questions` WHERE `id` = ? OR `question_code` = ? LIMIT 1', [id, id]);
-    if (!existing || existing.length === 0) {
-      return res.status(404).json({ success: false, error: 'Question not found' });
+    // 1. Flexible multi-field search to find existing question
+    let existing: any[] = [];
+    if (rawId) {
+      const [res1]: any = await db.query(
+        'SELECT * FROM `questions` WHERE `id` = ? OR `question_code` = ? OR LOWER(`id`) = LOWER(?) OR LOWER(`question_code`) = LOWER(?) LIMIT 1',
+        [rawId, rawId, rawId, rawId]
+      );
+      if (res1 && res1.length > 0) existing = res1;
     }
 
-    const realId = existing[0].id;
+    if (existing.length === 0 && bodyId) {
+      const [res2]: any = await db.query(
+        'SELECT * FROM `questions` WHERE `id` = ? OR `question_code` = ? OR LOWER(`id`) = LOWER(?) OR LOWER(`question_code`) = LOWER(?) LIMIT 1',
+        [bodyId, bodyId, bodyId, bodyId]
+      );
+      if (res2 && res2.length > 0) existing = res2;
+    }
 
-    // Validate & resolve subject_id against MySQL subjects table
+    if (existing.length === 0 && bodyCode) {
+      const [res3]: any = await db.query(
+        'SELECT * FROM `questions` WHERE `question_code` = ? OR LOWER(`question_code`) = LOWER(?) LIMIT 1',
+        [bodyCode, bodyCode]
+      );
+      if (res3 && res3.length > 0) existing = res3;
+    }
+
+    // 2. Validate & resolve subject_id against MySQL subjects table
     let validSubjectId: string | null = null;
     const rawSub = body.subjectId || body.subject_id;
     if (rawSub) {
@@ -461,12 +485,12 @@ questionsRouter.put('/:id', async (req: Request, res: Response, next: NextFuncti
       const [s]: any = await db.query('SELECT `id` FROM `subjects` WHERE LOWER(`name`) = LOWER(?) OR LOWER(`code`) = LOWER(?) LIMIT 1', [body.subject, body.subject]);
       if (s && s.length > 0) validSubjectId = s[0].id;
     }
-    if (!validSubjectId && existing[0].subject_id) {
+    if (!validSubjectId && existing.length > 0 && existing[0].subject_id) {
       const [s]: any = await db.query('SELECT `id` FROM `subjects` WHERE `id` = ? LIMIT 1', [existing[0].subject_id]);
       if (s && s.length > 0) validSubjectId = s[0].id;
     }
 
-    // Validate & resolve chapter_id against MySQL chapters table
+    // 3. Validate & resolve chapter_id against MySQL chapters table
     let validChapterId: string | null = null;
     const rawChap = body.chapterId || body.chapter_id;
     if (rawChap) {
@@ -477,13 +501,95 @@ questionsRouter.put('/:id', async (req: Request, res: Response, next: NextFuncti
       const [c]: any = await db.query('SELECT `id` FROM `chapters` WHERE LOWER(`title`) = LOWER(?) OR LOWER(`chapter_code`) = LOWER(?) LIMIT 1', [body.chapter, body.chapter]);
       if (c && c.length > 0) validChapterId = c[0].id;
     }
-    if (!validChapterId && existing[0].chapter_id) {
+    if (!validChapterId && existing.length > 0 && existing[0].chapter_id) {
       const [c]: any = await db.query('SELECT `id` FROM `chapters` WHERE `id` = ? LIMIT 1', [existing[0].chapter_id]);
       if (c && c.length > 0) validChapterId = c[0].id;
     }
 
-    // Safely prepare question code and avoid unique key collision
-    let finalQCode = (body.questionCode || body.question_code || existing[0].question_code || `Q-${Date.now().toString().slice(-6)}`).trim();
+    // 4. If question does not exist in DB yet, UPSERT (insert it) to ensure no "Question not found" error ever occurs
+    if (!existing || existing.length === 0) {
+      const newId = bodyId || rawId || crypto.randomUUID();
+      let qCode = (bodyCode || rawId || `Q-${Date.now().toString().slice(-6)}`).trim();
+      const [dup]: any = await db.query('SELECT `id` FROM `questions` WHERE `question_code` = ? LIMIT 1', [qCode]);
+      if (dup && dup.length > 0) {
+        qCode = `${qCode}-${Date.now().toString().slice(-4)}`;
+      }
+
+      const contentJson = JSON.stringify(body.content || []);
+      const explanationJson = JSON.stringify(body.explanation || []);
+      const difficulty = body.difficulty || 'Medium';
+      const marks = isNaN(Number(body.marks)) ? 4 : Number(body.marks);
+      const negMarks = isNaN(Number(body.negativeMarks ?? body.negative_marks)) ? 1 : Number(body.negativeMarks ?? body.negative_marks);
+      const correctOption = String(body.correctOption || body.correct_option || body.correctAnswer || 'a').toLowerCase().trim();
+      const optionLayout = body.optionLayout || body.option_layout || 'grid_2x2';
+      const year = Number(body.year) || 2024;
+      const source = body.source || 'saved';
+      const rawText = body.rawText || body.raw_text || '';
+
+      await db.query(
+        `INSERT INTO \`questions\` 
+         (\`id\`, \`question_code\`, \`subject_id\`, \`chapter_id\`, \`question_type\`, \`content\`, \`explanation\`, \`difficulty\`, \`marks\`, \`negative_marks\`, \`correct_option\`, \`option_layout\`, \`year\`, \`source\`, \`raw_text\`)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [newId, qCode, validSubjectId, validChapterId, body.questionType || body.question_type || 'MCQ_SINGLE', contentJson, explanationJson, difficulty, marks, negMarks, correctOption, optionLayout, year, source, rawText]
+      );
+
+      // Insert options
+      if (Array.isArray(body.options)) {
+        for (let i = 0; i < body.options.length; i++) {
+          const opt = body.options[i];
+          const optId = crypto.randomUUID();
+          const optKey = (opt.key || opt.option_key || String.fromCharCode(97 + i)).toLowerCase();
+          let contentArr = opt.content || [];
+          if (!Array.isArray(contentArr)) contentArr = [contentArr];
+          let optRaw = opt.rawText || opt.raw_text || '';
+          if (!optRaw && Array.isArray(contentArr)) {
+            optRaw = contentArr.map((c: any) => c.latex ? `\\(${c.latex}\\)` : (c.html || c.text || '')).filter(Boolean).join(' ');
+          }
+          if (contentArr.length === 0 && optRaw) {
+            contentArr = [{ type: 'text', html: optRaw, text: optRaw }];
+          }
+          let optImg = opt.imageUrl || opt.image_url;
+          if (!optImg && Array.isArray(contentArr)) {
+            const imgBlock = contentArr.find((b: any) => b.type === 'image' || b.imageUrl || b.url || b.src);
+            if (imgBlock) optImg = imgBlock.imageUrl || imgBlock.url || imgBlock.src;
+          }
+          if (!optImg && optRaw && /<img\s+/i.test(optRaw)) {
+            const m = optRaw.match(/src=["']([^"']+)["']/i);
+            if (m) optImg = m[1];
+          }
+          if (optImg && !contentArr.some((c: any) => c.type === 'image')) {
+            contentArr.push({ type: 'image', url: optImg, src: optImg, imageUrl: optImg });
+          }
+          const optContent = JSON.stringify(contentArr);
+          await db.query(
+            `INSERT INTO \`question_options\` (\`id\`, \`question_id\`, \`option_key\`, \`content\`, \`raw_text\`, \`sort_order\`)
+             VALUES (?, ?, ?, ?, ?, ?)`,
+            [optId, newId, optKey, optContent, optRaw, i + 1]
+          );
+        }
+      }
+
+      const [created]: any = await db.query(
+        `SELECT q.*, s.name AS subject_name, c.title AS chapter_title 
+         FROM \`questions\` q
+         LEFT JOIN \`subjects\` s ON q.subject_id = s.id
+         LEFT JOIN \`chapters\` c ON q.chapter_id = c.id
+         WHERE q.id = ?`,
+        [newId]
+      );
+
+      const [savedOpts]: any = await db.query(
+        'SELECT * FROM `question_options` WHERE `question_id` = ? ORDER BY `sort_order` ASC',
+        [newId]
+      );
+
+      return res.status(200).json({ success: true, data: formatQuestion(created[0], savedOpts || []) });
+    }
+
+    // 5. Otherwise, UPDATE existing question
+    const realId = existing[0].id;
+
+    let finalQCode = (bodyCode || existing[0].question_code || `Q-${Date.now().toString().slice(-6)}`).trim();
     if (finalQCode !== existing[0].question_code) {
       const [dup]: any = await db.query('SELECT `id` FROM `questions` WHERE `question_code` = ? AND `id` != ? LIMIT 1', [finalQCode, realId]);
       if (dup && dup.length > 0) {

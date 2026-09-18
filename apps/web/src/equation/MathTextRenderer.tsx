@@ -1,5 +1,5 @@
 import React from 'react';
-import { KaTeXRenderer, sanitizeLatexFormula } from './KaTeXRenderer.js';
+import { KaTeXRenderer, sanitizeLatexFormula, UNICODE_TO_LATEX_MAP } from './KaTeXRenderer.js';
 
 interface MathTextRendererProps {
   text?: string;
@@ -63,7 +63,6 @@ export function resolveImageUrl(src: string | undefined): string {
     }
     return `/uploads/${imgSrc}`;
   }
-
 
   const supabaseUrl = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_URL) || '';
   const bucketName = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_SUPABASE_STORAGE_BUCKET) || 'question-assets';
@@ -147,9 +146,16 @@ type MathToken =
   | { type: 'text'; content: string }
   | { type: 'math'; latex: string; block: boolean };
 
+const UNICODE_MATH_REGEX = new RegExp(
+  Object.keys(UNICODE_TO_LATEX_MAP)
+    .map(k => k.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&'))
+    .join('|'),
+  'g'
+);
+
 /**
- * Parses any text containing LaTeX, delimiters, un-delimited math, units, and chemical formulas
- * into clean React nodes with 100% token isolation (no nested delimiter corruptions).
+ * Parses any text containing LaTeX, delimiters, un-delimited math, units, chemical formulas,
+ * and Unicode math symbols into clean React nodes with 100% token isolation.
  */
 export function parseAndTokenizeMath(text: string, defaultBlock = false): MathToken[] {
   if (!text) return [];
@@ -214,7 +220,6 @@ export function parseAndTokenizeMath(text: string, defaultBlock = false): MathTo
   // 3e. Units with shorthand exponents e.g. 1ms-2, 2ms-2, 1.5ms-2, 2.5ms-2, 10m s^-2, 10ms-2, m s^-2, ms^-2, m/s^2, kg m^-3, N m^-2
   s = s.replace(/\b(\d+(?:\.\d+)?\s*(?:m|cm|mm|km|kg|g|s|N|dyne|dyn|J|W|V|A|Hz|rad|Pa)\s*(?:s|m|cm|g|kg)?\s*[\^]?\s*[-]?\d+)\b/gi, (m) => {
     let formatted = m.trim();
-    // E.g. "1ms-2" -> "1 \text{ms}^{-2}", "10m s^-2" -> "10 \text{m s}^{-2}"
     formatted = formatted.replace(/^(\d+(?:\.\d+)?)\s*/, '$1\\text{ ');
     formatted = formatted.replace(/([a-zA-Z]+)\s*[\^]?\s*([+-]?\d+)/g, '$1}^{$2');
     if (formatted.includes('\\text{')) {
@@ -240,7 +245,17 @@ export function parseAndTokenizeMath(text: string, defaultBlock = false): MathTo
     return addMath(m, false);
   });
 
-  // STEP 4: Tokenize into clean array of text and math
+  // 3h. Unicode Greek letters & math symbols in plain text -> render as crisp KaTeX math
+  s = s.replace(UNICODE_MATH_REGEX, (m) => {
+    if (m.includes('\uE000MATH_')) return m;
+    const latexVal = UNICODE_TO_LATEX_MAP[m];
+    if (latexVal) {
+      return addMath(latexVal, false);
+    }
+    return m;
+  });
+
+  // STEP 4: Tokenize into clean array of text and math, preserving necessary spacing
   const tokens: MathToken[] = [];
   const parts = s.split(/(\uE000MATH_\d+\uE001)/g);
 
@@ -260,8 +275,9 @@ export function parseAndTokenizeMath(text: string, defaultBlock = false): MathTo
         .replace(/<p\s*\/?>/gi, '')
         .replace(/<\/p>/gi, '')
         .replace(/&lt;p&gt;&lt;\/p&gt;/gi, '')
-        .trim();
-      if (cleanPart) {
+        .replace(/\s+/g, ' ');
+
+      if (cleanPart && cleanPart !== ' ') {
         tokens.push({ type: 'text', content: cleanPart });
       }
     }

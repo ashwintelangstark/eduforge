@@ -535,8 +535,22 @@ export const CreateQuestionPage: React.FC<CreateQuestionPageProps> = ({
 
       if (initialQuestion?.id) {
         setPersistedStatus(initialQuestion.id, 'saved');
-        await api.updateQuestion(initialQuestion.id, questionData as Question);
-        alert('Question updated successfully!');
+        try {
+          await api.updateQuestion(initialQuestion.id, questionData as Question);
+          alert('Question updated successfully!');
+        } catch (updateErr) {
+          console.warn('Update failed, attempting create/upsert fallback:', updateErr);
+          const res: any = await api.createQuestion(questionData);
+          if (res?.error) {
+            alert(res.error);
+            return false;
+          }
+          const createdId = res?.data?.id || res?.id;
+          if (createdId) {
+            setPersistedStatus(createdId, 'saved');
+          }
+          alert('Question saved successfully!');
+        }
       } else {
         const res: any = await api.createQuestion(questionData);
         if (res?.error) {
@@ -552,6 +566,16 @@ export const CreateQuestionPage: React.FC<CreateQuestionPageProps> = ({
       return true;
     } catch (err: any) {
       console.error('Save question error:', err);
+      // Final attempt: try creating if everything else failed
+      try {
+        const fallbackRes: any = await api.createQuestion(questionData);
+        if (fallbackRes?.data?.id || fallbackRes?.id) {
+          alert('Question saved successfully!');
+          return true;
+        }
+      } catch (fallbackErr) {
+        console.error('Ultimate fallback failed:', fallbackErr);
+      }
       const errMsg = err?.response?.data?.error || err?.message || 'Error saving question.';
       alert(errMsg);
       return false;
