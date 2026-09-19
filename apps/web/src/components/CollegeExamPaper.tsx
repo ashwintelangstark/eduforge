@@ -461,12 +461,23 @@ export const CollegeExamPaper: React.FC<CollegeExamPaperProps> = ({
                     return keyA.localeCompare(keyB);
                   });
 
-                  // Question Text & Diagrams
-                  const rawTextStr = stripQuestionCode(q.rawText || (typeof q.content === 'string' ? q.content : '') || '');
-                  const hasEmbeddedImg = /<img\s+/i.test(rawTextStr);
-
                   // Diagrams & Images
                   const contentArr = Array.isArray(q.content) ? (q.content as any[]) : [];
+                  const rawContentText = contentArr
+                    .filter((b: any) => b.type === 'text' || b.text || b.html)
+                    .map((b: any) => b.text || b.html || '')
+                    .filter(Boolean)
+                    .join('\n');
+
+                  const candidateText =
+                    (rawContentText && (rawContentText.includes('<p') || rawContentText.includes('<br') || rawContentText.includes('\n')))
+                      ? rawContentText
+                      : (q.rawText || (typeof q.content === 'string' ? q.content : '') || rawContentText || '');
+
+                  // Question Text & Diagrams
+                  const rawTextStr = stripQuestionCode(candidateText);
+                  const hasEmbeddedImg = /<img\s+/i.test(rawTextStr);
+
                   const qSvg = q.diagramSvg || (q as any).diagram_svg || contentArr.find((b: any) => b.type === 'diagram' || b.diagramSvg || b.svg)?.diagramSvg || contentArr.find((b: any) => b.type === 'diagram' || b.diagramSvg || b.svg)?.svg;
                   const qImg = q.imageUrl || q.diagramUrl || contentArr.find((b: any) => b.type === 'image' || b.imageUrl || b.url)?.url;
 

@@ -437,7 +437,7 @@ export const CreateQuestionPage: React.FC<CreateQuestionPageProps> = ({
         .filter(b => b.type === 'text')
         .map(b => b.text)
         .filter(Boolean)
-        .join(' ')
+        .join('\n')
     );
 
     const correctOpt = options.find(o => o.isCorrect);
@@ -613,7 +613,7 @@ export const CreateQuestionPage: React.FC<CreateQuestionPageProps> = ({
     .filter(b => b.type === 'text')
     .map(b => b.text)
     .filter(Boolean)
-    .join(' ');
+    .join('\n');
   const imgMatches = rawStatementPreview.match(/<img[^>]*src=["']([^"']+)["']/i);
   const effectiveImageUrl = imgFromBlocks || (imgMatches ? imgMatches[1] : undefined) || initialQuestion?.imageUrl;
 

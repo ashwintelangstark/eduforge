@@ -47,14 +47,16 @@ export const StudentPreviewDrawer: React.FC<StudentPreviewDrawerProps> = ({
   if (!isOpen) return null;
 
   const contentArr = Array.isArray(question?.content) ? (question?.content as any[]) : [];
+  const rawContentText = contentArr
+    .filter((b: any) => b.type === 'text' || b.text || b.html)
+    .map((b: any) => b.text || b.html || '')
+    .filter(Boolean)
+    .join('\n');
+
   const defaultQuestionText =
-    question?.rawText ||
-    contentArr
-      .filter((b: any) => b.type === 'text' || b.text || b.html)
-      .map((b: any) => b.text || b.html || '')
-      .filter(Boolean)
-      .join(' ') ||
-    '';
+    (rawContentText && (rawContentText.includes('<p') || rawContentText.includes('<br') || rawContentText.includes('\n')))
+      ? rawContentText
+      : (question?.rawText || rawContentText || '');
   const defaultCode = question?.id ? `BIO-CELL-${question.id.slice(-4)}` : 'BIO-CELL-0016';
   const defaultOptions = question?.options || [];
 

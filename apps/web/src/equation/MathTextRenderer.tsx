@@ -93,7 +93,7 @@ export function resolveImageUrl(src: string | undefined): string {
 
 export function cleanHtmlTags(text: string): string {
   if (!text) return '';
-  let str = String(text).trim();
+  let str = String(text);
 
   // 1. Decode HTML entities so escaped tags (&lt;p&gt;&lt;/p&gt;, &lt;br&gt;, etc.) become standardized
   str = str
@@ -105,34 +105,42 @@ export function cleanHtmlTags(text: string): string {
     .replace(/&nbsp;/gi, ' ')
     .replace(/&#160;/gi, ' ');
 
-  // 2. Iteratively strip empty/stray HTML tags e.g. <p></p>, <p><br></p>, <div></div>, <span></span>
-  let prev = '';
-  while (prev !== str) {
-    prev = str;
-    str = str
-      .replace(/<\s*(?:p|div|span|h[1-6]|ul|ol|li)\s*>\s*(?:<\s*br\s*\/?\s*>|\s)*<\s*\/\s*(?:p|div|span|h[1-6]|ul|ol|li)\s*>/gi, ' ')
-      .replace(/<\s*br\s*\/?\s*>/gi, ' ');
-  }
+  // 2. Convert subscripts and superscripts to LaTeX before stripping tags so chemical formulas (e.g. HNO2) render properly
+  str = str.replace(/<sub>\s*([^{}<>]*?)\s*<\/sub>/gi, '_{$1}');
+  str = str.replace(/<sup>\s*([^{}<>]*?)\s*<\/sup>/gi, '^{$1}');
 
-  // 3. Strip remaining HTML formatting/wrapper tags (except <img>)
-  str = str.replace(/<\/?(p|div|br|span|h[1-6]|ul|ol|li|strong|b|em|i|u|del|sub|sup)[^>]*>/gi, (match) => {
+  // 3. Convert HTML line breaks and paragraph breaks into newline characters (\n)
+  str = str
+    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+    .replace(/<\/\s*(?:p|div|li|tr|h[1-6])\s*>/gi, '\n')
+    .replace(/<\s*(?:p|div|li|tr|h[1-6])[^>]*>/gi, '\n');
+
+  // 4. Strip remaining HTML formatting tags (except <img>)
+  str = str.replace(/<\/?(span|strong|b|em|i|u|del|ul|ol|table|tbody|thead|td|th)[^>]*>/gi, (match) => {
     if (/img/i.test(match)) return match;
-    return ' ';
+    return '';
   });
 
-  // 4. Final safety cleanup for any lingering literal or encoded <p>, </p>, <p></p>
-  str = str
-    .replace(/<\/?p\s*\/?>/gi, ' ')
-    .replace(/&lt;\/?p\s*\/?&gt;/gi, ' ')
-    .replace(/<\s*\/\s*p\s*>/gi, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  // 5. Multi-statement separation when text is on a single line without newlines
+  // e.g. "Given below are two statements: Statement-I: ... Statement-II: ..."
+  str = str.replace(
+    /(?<=\S)\s+(Statement-[I|V|X\d]+:|Statement\s+\d+:|Statement\s+[I|V|X\d]+:|Assertion\s*(\([A-Z]\))?:|Reason\s*(\([A-Z]\))?:|List-[I|V|X\d]+:|List\s+[I|V|X\d]+:|Column-[I|V|X\d]+:|Column\s+[I|V|X\d]+:)/gi,
+    '\n$1'
+  );
 
-  return str;
+  // 6. Clean up line spaces while preserving distinct \n newlines
+  str = str
+    .split(/\r?\n/)
+    .map(line => line.replace(/[^\S\r\n]+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n');
+
+  return str.trim();
 }
 
 /**
  * Strips question code identifiers like [Q-BIO-001], [Q-PHY-01-001], Q-BIO-001:, (Q-001), [Q101], etc.
+ * while preserving multi-line statement formatting.
  */
 export function stripQuestionCode(text: string | undefined): string {
   if (!text) return '';
@@ -235,13 +243,13 @@ export function parseAndTokenizeMath(text: string, defaultBlock = false): MathTo
     return addMath(formatted, false);
   });
 
-  // 3f. Chemical formulas e.g. CaCO_3, H_2O, CO_2, H_2SO_4, KMnO_4
-  s = s.replace(/\b(CaCO_3|H_2O|CO_2|O_2|N_2|H_2SO_4|KMnO_4|FeSO_4|NaCl|C_6H_12O_6|NO_2|SO_2|NH_3|HCl|HNO_3|NaOH|KOH)\b/g, (m) => {
+  // 3f. Chemical formulas e.g. CaCO_3, H_2O, CO_2, H_2SO_4, KMnO_4, HNO_2, HNO_3
+  s = s.replace(/\b(CaCO_3|H_2O|CO_2|O_2|N_2|H_2SO_4|KMnO_4|FeSO_4|NaCl|C_6H_12O_6|NO_2|SO_2|NH_3|HCl|HNO_3|HNO_2|NaOH|KOH)\b/g, (m) => {
     return addMath(`\\mathrm{${m}}`, false);
   });
 
-  // 3g. Standalone variables with exponents or subscripts e.g. x^2, y_1, v^2, u^2, a_1
-  s = s.replace(/\b([a-zA-Z]\s*[\^\_]\s*(?:\{[^{}]+\}|[a-zA-Z0-9\+\-]+))\b/g, (m) => {
+  // 3g. Standalone variables with exponents or subscripts e.g. x^2, y_1, v^2, u^2, a_1, HNO_{2}, HNO_2
+  s = s.replace(/\b([a-zA-Z]+\s*[\^\_]\s*(?:\{[^{}]+\}|[a-zA-Z0-9\+\-]+))\b/g, (m) => {
     return addMath(m, false);
   });
 
@@ -275,7 +283,7 @@ export function parseAndTokenizeMath(text: string, defaultBlock = false): MathTo
         .replace(/<p\s*\/?>/gi, '')
         .replace(/<\/p>/gi, '')
         .replace(/&lt;p&gt;&lt;\/p&gt;/gi, '')
-        .replace(/\s+/g, ' ');
+        .replace(/[^\S\r\n]+/g, ' ');
 
       if (cleanPart && cleanPart !== ' ') {
         tokens.push({ type: 'text', content: cleanPart });
@@ -300,14 +308,11 @@ export function autoDetectAndWrapLatex(str: string): string {
   }).join('');
 }
 
-function RenderSingleMathTextChunk({ text, block, className }: { text: string; block?: boolean; className?: string }) {
+function RenderSingleMathTextLine({ text, block, className }: { text: string; block?: boolean; className?: string }) {
   if (!text) return null;
-  const cleaned = cleanHtmlTags(text);
-  if (!cleaned) return null;
-
-  const tokens = parseAndTokenizeMath(cleaned, block);
+  const tokens = parseAndTokenizeMath(text, block);
   if (tokens.length === 0) {
-    return cleaned ? <span className={className}>{cleaned}</span> : null;
+    return text ? <span className={className}>{text}</span> : null;
   }
 
   return (
@@ -326,6 +331,28 @@ function RenderSingleMathTextChunk({ text, block, className }: { text: string; b
       })}
     </span>
   );
+}
+
+function RenderSingleMathTextChunk({ text, block, className }: { text: string; block?: boolean; className?: string }) {
+  if (!text) return null;
+  const cleaned = cleanHtmlTags(text);
+  if (!cleaned) return null;
+
+  // Split lines on newlines so statement blocks render one below another
+  const lines = cleaned.split(/\r?\n/).filter(line => line.trim().length > 0);
+  if (lines.length > 1) {
+    return (
+      <div className={`space-y-1.5 ${className || ''}`}>
+        {lines.map((line, lIdx) => (
+          <div key={`line-${lIdx}`} className="leading-relaxed">
+            <RenderSingleMathTextLine text={line} block={block} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return <RenderSingleMathTextLine text={cleaned} block={block} className={className} />;
 }
 
 const MathTextRendererComponent: React.FC<MathTextRendererProps> = ({
