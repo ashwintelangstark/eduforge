@@ -198,11 +198,11 @@ export function sanitizeLatexFormula(latex: string): string {
   if (!latex) return '';
   let s = String(latex).trim();
 
-  // Strip accidental outer $ or $$ or \( \) or \[ \]
-  s = s.replace(/^\\\[([\s\S]*)\\\]$/, '$1')
-       .replace(/^\\\(([\s\S]*)\\\)$/, '$1')
-       .replace(/^\$\$([\s\S]*)\$\$$/, '$1')
-       .replace(/^\$([\s\S]*)\$$/, '$1')
+  // Strip accidental outer $ or $$ or \( \) or \[ \] or \\( \\) or \\[ \\]
+  s = s.replace(/^\\+\[([\s\S]*?)\\+\]$/, '$1')
+       .replace(/^\\+\(([\s\S]*?)\\+\)$/, '$1')
+       .replace(/^\$\$([\s\S]*?)\$\$$/, '$1')
+       .replace(/^\$([\s\S]*?)\$$/, '$1')
        .trim();
 
   // Decode any HTML entities
@@ -211,12 +211,15 @@ export function sanitizeLatexFormula(latex: string): string {
        .replace(/&gt;/g, '>')
        .replace(/&quot;/g, '"')
        .replace(/&#39;/g, "'")
-       .replace(/&nbsp;/g, ' ');
+       .replace(/&#92;/g, '\\')
+       .replace(/&bsol;/g, '\\')
+       .replace(/&nbsp;/g, ' ')
+       .replace(/&#160;/g, ' ');
 
   // Convert any embedded Unicode Greek/math characters to KaTeX commands
   s = s.replace(UNICODE_REGEX, match => UNICODE_TO_LATEX_MAP[match] || match);
 
-  // Normalize excessive backslashes e.g. \\mathrm -> \mathrm, \\frac -> \frac
+  // Normalize excessive backslashes e.g. \\mathrm -> \mathrm, \\frac -> \frac, \\left -> \left
   s = s.replace(/\\\\([a-zA-Z]+)/g, '\\$1');
 
   // Fix \text{...} containing ^ or _ or - which KaTeX math-mode rejects inside \text

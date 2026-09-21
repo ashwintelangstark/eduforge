@@ -245,7 +245,13 @@ export const StudentPreviewDrawer: React.FC<StudentPreviewDrawerProps> = ({
             {defaultOptions.length > 0 ? (
               defaultOptions.map((opt, idx) => {
                 const isCorrect = opt.isCorrect || (question?.correctAnswer && (opt.key || String.fromCharCode(65 + idx)).toLowerCase() === String(question.correctAnswer).toLowerCase());
-                const optRaw = (opt as any).rawText || (typeof (opt as any).content === 'string' ? (opt as any).content : (Array.isArray((opt as any).content) ? (opt as any).content.map((c: any) => c.latex ? `\\(${c.latex}\\)` : (c.html || c.text || '')).join(' ') : ''));
+                const optRaw = (opt as any).rawText ||
+                  (opt as any).raw_text ||
+                  (opt as any).text ||
+                  (opt as any).label ||
+                  ((opt as any).latex ? `\\(${ (opt as any).latex }\\)` : '') ||
+                  ((opt as any).rawLatex ? `\\(${ (opt as any).rawLatex }\\)` : '') ||
+                  (typeof (opt as any).content === 'string' ? (opt as any).content : (Array.isArray((opt as any).content) ? (opt as any).content.map((c: any) => (c.latex || c.rawLatex) ? `\\(${c.latex || c.rawLatex}\\)` : (c.html || c.text || '')).join(' ') : ''));
                 const rawOptImg = opt.imageUrl || (opt as any).image_url;
                 const optImg = rawOptImg && !isAlreadyInText(rawOptImg, optRaw) ? rawOptImg : null;
 

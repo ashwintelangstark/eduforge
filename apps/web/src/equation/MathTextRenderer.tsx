@@ -95,45 +95,65 @@ export function cleanHtmlTags(text: string): string {
   if (!text) return '';
   let str = String(text);
 
-  // 1. Decode HTML entities so escaped tags (&lt;p&gt;&lt;/p&gt;, &lt;br&gt;, etc.) become standardized
+  // 1. Temporarily protect any explicit LaTeX blocks from being mangled
+  const protectedMath: string[] = [];
+  const protect = (m: string) => {
+    const id = `\uE000MATHNUM${protectedMath.length}\uE001`;
+    protectedMath.push(m);
+    return ` ${id} `;
+  };
+
+  str = str.replace(/\$\$([\s\S]*?)\$\$/g, protect)
+           .replace(/\\+\[([\s\S]*?)\\+\]/g, protect)
+           .replace(/\\+begin\{([a-zA-Z*]+)\}([\s\S]*?)\\+end\{\1\}/g, protect)
+           .replace(/\\+\(([\s\S]*?)\\+\)/g, protect)
+           .replace(/(?<!\\)\$([^\$\n]+?)(?<!\\)\$/g, protect);
+
+  // 2. Decode HTML entities so escaped tags (&lt;p&gt;&lt;/p&gt;, &lt;br&gt;, etc.) become standardized
   str = str
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
+    .replace(/&#92;/gi, '\\')
+    .replace(/&bsol;/gi, '\\')
     .replace(/&amp;/gi, '&')
     .replace(/&nbsp;/gi, ' ')
     .replace(/&#160;/gi, ' ');
 
-  // 2. Convert subscripts and superscripts to LaTeX before stripping tags so chemical formulas (e.g. HNO2) render properly
+  // 3. Convert subscripts and superscripts to LaTeX before stripping tags so chemical formulas (e.g. HNO2) render properly
   str = str.replace(/<sub>\s*([^{}<>]*?)\s*<\/sub>/gi, '_{$1}');
   str = str.replace(/<sup>\s*([^{}<>]*?)\s*<\/sup>/gi, '^{$1}');
 
-  // 3. Convert HTML line breaks and paragraph breaks into newline characters (\n)
+  // 4. Convert HTML line breaks and paragraph breaks into newline characters (\n)
   str = str
     .replace(/<\s*br\s*\/?\s*>/gi, '\n')
     .replace(/<\/\s*(?:p|div|li|tr|h[1-6])\s*>/gi, '\n')
     .replace(/<\s*(?:p|div|li|tr|h[1-6])[^>]*>/gi, '\n');
 
-  // 4. Strip remaining HTML formatting tags (except <img>)
+  // 5. Strip remaining HTML formatting tags (except <img>)
   str = str.replace(/<\/?(span|strong|b|em|i|u|del|ul|ol|table|tbody|thead|td|th)[^>]*>/gi, (match) => {
     if (/img/i.test(match)) return match;
     return '';
   });
 
-  // 5. Multi-statement separation when text is on a single line without newlines
-  // e.g. "Given below are two statements: Statement-I: ... Statement-II: ..."
+  // 6. Multi-statement separation when text is on a single line without newlines
   str = str.replace(
     /(?<=\S)\s+(Statement-[I|V|X\d]+:|Statement\s+\d+:|Statement\s+[I|V|X\d]+:|Assertion\s*(\([A-Z]\))?:|Reason\s*(\([A-Z]\))?:|List-[I|V|X\d]+:|List\s+[I|V|X\d]+:|Column-[I|V|X\d]+:|Column\s+[I|V|X\d]+:)/gi,
     '\n$1'
   );
 
-  // 6. Clean up line spaces while preserving distinct \n newlines
+  // 7. Clean up line spaces while preserving distinct \n newlines
   str = str
     .split(/\r?\n/)
     .map(line => line.replace(/[^\S\r\n]+/g, ' ').trim())
     .filter(Boolean)
     .join('\n');
+
+  // 8. Restore protected LaTeX tokens
+  str = str.replace(/\uE000MATHNUM(\d+)\uE001/g, (_, id) => {
+    return protectedMath[parseInt(id, 10)] || '';
+  });
 
   return str.trim();
 }
@@ -150,7 +170,7 @@ export function stripQuestionCode(text: string | undefined): string {
   return str.trim();
 }
 
-type MathToken =
+export type MathToken =
   | { type: 'text'; content: string }
   | { type: 'math'; latex: string; block: boolean };
 
@@ -167,14 +187,12 @@ const UNICODE_MATH_REGEX = new RegExp(
  */
 export function parseAndTokenizeMath(text: string, defaultBlock = false): MathToken[] {
   if (!text) return [];
-
-  const rawCleaned = cleanHtmlTags(text);
-  if (!rawCleaned) return [];
+  let s = String(text);
 
   const mathBlocks: Array<{ latex: string; block: boolean }> = [];
 
   const addMath = (rawLatex: string, block: boolean) => {
-    const id = `\uE000MATH_${mathBlocks.length}\uE001`;
+    const id = `\uE000MATHNUM${mathBlocks.length}\uE001`;
     mathBlocks.push({
       latex: sanitizeLatexFormula(rawLatex),
       block: block || defaultBlock
@@ -182,51 +200,115 @@ export function parseAndTokenizeMath(text: string, defaultBlock = false): MathTo
     return ` ${id} `;
   };
 
-  let s = rawCleaned;
-
-  // STEP 1: Extract and protect explicit block LaTeX delimiters
-  // $$ ... $$
+  // STAGE 1: Extract and protect explicit math blocks (supporting single and double escaped backslashes)
+  // 1. $$ ... $$
   s = s.replace(/\$\$([\s\S]*?)\$\$/g, (_, math) => addMath(math, true));
-  // \[ ... \]
-  s = s.replace(/\\\[([\s\S]*?)\\\]/g, (_, math) => addMath(math, true));
-  // \begin{env} ... \end{env}
-  s = s.replace(/\\begin\{([a-zA-Z*]+)\}([\s\S]*?)\\end\{\1\}/g, (full) => addMath(full, true));
+  
+  // 2. \[ ... \] or \\[ ... \\]
+  s = s.replace(/\\+\[([\s\S]*?)\\+\]/g, (_, math) => addMath(math, true));
 
-  // STEP 2: Extract and protect explicit inline LaTeX delimiters
-  // \( ... \)
-  s = s.replace(/\\\(([\s\S]*?)\\\)/g, (_, math) => addMath(math, false));
-  // $ ... $ (handling non-currency usage)
+  // 3. \begin{env} ... \end{env}
+  s = s.replace(/\\+begin\{([a-zA-Z*]+)\}([\s\S]*?)\\+end\{\1\}/g, (full) => addMath(full, true));
+
+  // 4. \( ... \) or \\( ... \\)
+  s = s.replace(/\\+\(([\s\S]*?)\\+\)/g, (_, math) => addMath(math, false));
+
+  // 5. $ ... $
   s = s.replace(/(?<!\\)\$([^\$\n]+?)(?<!\\)\$/g, (_, math) => addMath(math, false));
 
-  // STEP 3: On ONLY the remaining plain text (outside protected math tokens), auto-detect math:
-  
-  // 3a. Raw un-delimited LaTeX commands starting with backslash e.g. \frac{a}{b}, \sqrt{x}, \mathrm{...}, \alpha, \theta
-  const latexCommandRegex = /\\([a-zA-Z]+|[,;:! %])(?:\s*\[[^\]]*\])?(?:\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})*(?:\s*[_^]\s*(?:\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}|[a-zA-Z0-9+-]+))*/g;
-  s = s.replace(latexCommandRegex, (match) => {
-    const trimmed = match.trim();
-    if (!trimmed || trimmed === '\\' || trimmed.includes('\uE000MATH_')) return match;
-    return addMath(trimmed, false);
+  // STAGE 2: Clean HTML tags & decode entities in the non-math portions
+  s = s.replace(/&lt;/gi, '<')
+       .replace(/&gt;/gi, '>')
+       .replace(/&quot;/gi, '"')
+       .replace(/&#39;/gi, "'")
+       .replace(/&#92;/gi, '\\')
+       .replace(/&bsol;/gi, '\\')
+       .replace(/&amp;/gi, '&')
+       .replace(/&nbsp;/gi, ' ')
+       .replace(/&#160;/gi, ' ');
+
+  // Subscripts & Superscripts from HTML
+  s = s.replace(/<sub>\s*([^{}<>]*?)\s*<\/sub>/gi, '_{$1}');
+  s = s.replace(/<sup>\s*([^{}<>]*?)\s*<\/sup>/gi, '^{$1}');
+
+  // Linebreaks
+  s = s.replace(/<\s*br\s*\/?\s*>/gi, '\n')
+       .replace(/<\/\s*(?:p|div|li|tr|h[1-6])\s*>/gi, '\n')
+       .replace(/<\s*(?:p|div|li|tr|h[1-6])[^>]*>/gi, '\n');
+
+  // Strip remaining HTML tags (except <img>)
+  s = s.replace(/<\/?(span|strong|b|em|i|u|del|ul|ol|table|tbody|thead|td|th)[^>]*>/gi, (match) => {
+    if (/img/i.test(match)) return match;
+    return '';
   });
 
-  // 3b. Scientific notation e.g. 6.67 x 10^-11 or 2.5 x 10^5
+  // Statement separator
+  s = s.replace(
+    /(?<=\S)\s+(Statement-[I|V|X\d]+:|Statement\s+\d+:|Statement\s+[I|V|X\d]+:|Assertion\s*(\([A-Z]\))?:|Reason\s*(\([A-Z]\))?:|List-[I|V|X\d]+:|List\s+[I|V|X\d]+:|Column-[I|V|X\d]+:|Column\s+[I|V|X\d]+:)/gi,
+    '\n$1'
+  );
+
+  // STAGE 3: On the remaining text outside protected tokens, detect raw un-delimited math:
+  
+  // 3a. Degree expressions: 30^\circ, 30^\circ C, 30^\circ\text{C}, 100°C, 45^\circ
+  s = s.replace(/(\d+(?:\.\d+)?\s*[\^]\s*(?:\\circ|\{?\\circ\}?)(?:\s*\\text\{[CF]\})?)/gi, (m) => {
+    if (m.includes('\uE000')) return m;
+    return addMath(m, false);
+  });
+
+  // Standalone ^\circ
+  s = s.replace(/([\^]\s*(?:\\circ|\{?\\circ\}?)(?:\s*\\text\{[CF]\})?)/gi, (m) => {
+    if (m.includes('\uE000')) return m;
+    return addMath(m, false);
+  });
+
+  // 3b. Scientific notation: 6.67 x 10^-11, 2.5 \times 10^5, 10^{-5}
   s = s.replace(/\b(\d+(?:\.\d+)?\s*(?:x|×|\*|\\times)\s*10\s*[\^]\s*(?:\{[+-]?\d+\}|[+-]?\d+))\b/gi, (m) => {
+    if (m.includes('\uE000')) return m;
     const latex = m.replace(/\s*(?:x|×|\*)\s*/gi, ' \\times ').replace(/10\^([+-]?\d+)/g, '10^{$1}');
     return addMath(latex, false);
   });
 
-  // 3c. Pure powers of 10 e.g. 10^-11, 10^5, 10^{-2}
   s = s.replace(/\b(10\s*[\^]\s*(?:\{[+-]?\d+\}|[+-]?\d+))\b/gi, (m) => {
+    if (m.includes('\uE000')) return m;
     const latex = m.replace(/10\^([+-]?\d+)/g, '10^{$1}');
     return addMath(latex, false);
   });
 
-  // 3d. Dimensional formulas e.g. [M L^2 T^-2]
+  // 3c. Dimensional formulas [M L^2 T^-2]
   s = s.replace(/(\[[MmLlTtAaKk\d\s\^\-\+\{\}]+\])/g, (m) => {
+    if (m.includes('\uE000')) return m;
     return addMath(m, false);
   });
 
-  // 3e. Units with shorthand exponents e.g. 1ms-2, 2ms-2, 1.5ms-2, 2.5ms-2, 10m s^-2, 10ms-2, m s^-2, ms^-2, m/s^2, kg m^-3, N m^-2
+  // 3d. Chemical formulas e.g. CaCO_3, H_2O, CO_2, H_2SO_4, KMnO_4, HNO_2, HNO_3
+  s = s.replace(/\b(CaCO_3|H_2O|CO_2|O_2|N_2|H_2SO_4|KMnO_4|FeSO_4|NaCl|C_6H_12O_6|NO_2|SO_2|NH_3|HCl|HNO_3|HNO_2|NaOH|KOH)\b/g, (m) => {
+    if (m.includes('\uE000')) return m;
+    return addMath(`\\mathrm{${m}}`, false);
+  });
+
+  // 3e. Variables and parenthesized expressions with exponents or subscripts: x^2, y_1, (a+b)^2, HNO_{2}
+  s = s.replace(/(\([a-zA-Z0-9\+\-\s\.]+\)\s*[\^\_]\s*(?:\{[^{}]+\}|[a-zA-Z0-9\+\-]+))/g, (m) => {
+    if (m.includes('\uE000')) return m;
+    return addMath(m, false);
+  });
+
+  // 3f. Complete LaTeX commands starting with \ or \\ (e.g. \frac{a}{b}, \sqrt{x}, \alpha, \pm, \int_0^1, \vec{v})
+  const latexCommandRegex = /\\+([a-zA-Z]+|[,;:! %])(?:\s*\[[^\]]*\])?(?:\s*\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\})*(?:\s*[_^]\s*(?:\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}|[a-zA-Z0-9+-]+))*/g;
+  s = s.replace(latexCommandRegex, (match) => {
+    const trimmed = match.trim();
+    if (!trimmed || trimmed === '\\' || trimmed === '\\\\' || trimmed.includes('\uE000')) return match;
+    return addMath(trimmed, false);
+  });
+
+  s = s.replace(/\b([a-zA-Z]+\s*[\^\_]\s*(?:\{[^{}]+\}|[a-zA-Z0-9\+\-]+))\b/g, (m) => {
+    if (m.includes('\uE000')) return m;
+    return addMath(m, false);
+  });
+
+  // 3g. Units with shorthand exponents: 10ms-2, 10 ms^-2, ms^-2, m/s^2, kg m^-3, N m^-2
   s = s.replace(/\b(\d+(?:\.\d+)?\s*(?:m|cm|mm|km|kg|g|s|N|dyne|dyn|J|W|V|A|Hz|rad|Pa)\s*(?:s|m|cm|g|kg)?\s*[\^]?\s*[-]?\d+)\b/gi, (m) => {
+    if (m.includes('\uE000')) return m;
     let formatted = m.trim();
     formatted = formatted.replace(/^(\d+(?:\.\d+)?)\s*/, '$1\\text{ ');
     formatted = formatted.replace(/([a-zA-Z]+)\s*[\^]?\s*([+-]?\d+)/g, '$1}^{$2');
@@ -236,26 +318,15 @@ export function parseAndTokenizeMath(text: string, defaultBlock = false): MathTo
     return addMath(formatted, false);
   });
 
-  // Standalone units like ms^-2, m s^-2, ms-2, s^-1, cm^3, m^2, m^3
   s = s.replace(/\b((?:[Nn]|dyne|dyn|[Gg]|kg|[Cc]m|[Mm]|s)\s*(?:s|m|cm)?\s*[\^]?\s*[-]?\d+)\b/g, (m) => {
-    if (/^\d+$/.test(m)) return m;
+    if (m.includes('\uE000') || /^\d+$/.test(m)) return m;
     let formatted = m.replace(/([a-zA-Z]+)\s*[\^]?\s*([+-]?\d+)/g, '\\text{$1}^{$2}');
     return addMath(formatted, false);
   });
 
-  // 3f. Chemical formulas e.g. CaCO_3, H_2O, CO_2, H_2SO_4, KMnO_4, HNO_2, HNO_3
-  s = s.replace(/\b(CaCO_3|H_2O|CO_2|O_2|N_2|H_2SO_4|KMnO_4|FeSO_4|NaCl|C_6H_12O_6|NO_2|SO_2|NH_3|HCl|HNO_3|HNO_2|NaOH|KOH)\b/g, (m) => {
-    return addMath(`\\mathrm{${m}}`, false);
-  });
-
-  // 3g. Standalone variables with exponents or subscripts e.g. x^2, y_1, v^2, u^2, a_1, HNO_{2}, HNO_2
-  s = s.replace(/\b([a-zA-Z]+\s*[\^\_]\s*(?:\{[^{}]+\}|[a-zA-Z0-9\+\-]+))\b/g, (m) => {
-    return addMath(m, false);
-  });
-
   // 3h. Unicode Greek letters & math symbols in plain text -> render as crisp KaTeX math
   s = s.replace(UNICODE_MATH_REGEX, (m) => {
-    if (m.includes('\uE000MATH_')) return m;
+    if (m.includes('\uE000')) return m;
     const latexVal = UNICODE_TO_LATEX_MAP[m];
     if (latexVal) {
       return addMath(latexVal, false);
@@ -263,13 +334,13 @@ export function parseAndTokenizeMath(text: string, defaultBlock = false): MathTo
     return m;
   });
 
-  // STEP 4: Tokenize into clean array of text and math, preserving necessary spacing
+  // STAGE 4: Tokenize into clean array of text and math, preserving necessary spacing
   const tokens: MathToken[] = [];
-  const parts = s.split(/(\uE000MATH_\d+\uE001)/g);
+  const parts = s.split(/(\uE000MATHNUM\d+\uE001)/g);
 
   for (const part of parts) {
     if (!part) continue;
-    const match = part.match(/^\uE000MATH_(\d+)\uE001$/);
+    const match = part.match(/^\uE000MATHNUM(\d+)\uE001$/);
     if (match) {
       const idx = parseInt(match[1], 10);
       const mb = mathBlocks[idx];
@@ -294,6 +365,27 @@ export function parseAndTokenizeMath(text: string, defaultBlock = false): MathTo
   return tokens;
 }
 
+export function groupTokensIntoLines(tokens: MathToken[]): MathToken[][] {
+  const lines: MathToken[][] = [[]];
+  for (const token of tokens) {
+    if (token.type === 'math') {
+      lines[lines.length - 1].push(token);
+    } else {
+      const textParts = token.content.split(/\r?\n/);
+      for (let i = 0; i < textParts.length; i++) {
+        if (i > 0) {
+          lines.push([]);
+        }
+        const part = textParts[i];
+        if (part && part.trim()) {
+          lines[lines.length - 1].push({ type: 'text', content: part });
+        }
+      }
+    }
+  }
+  return lines.filter(line => line.length > 0);
+}
+
 /**
  * Backward compatibility helper for wrapping raw text into $...$
  */
@@ -308,11 +400,33 @@ export function autoDetectAndWrapLatex(str: string): string {
   }).join('');
 }
 
-function RenderSingleMathTextLine({ text, block, className }: { text: string; block?: boolean; className?: string }) {
+function RenderSingleMathTextChunk({ text, block, className }: { text: string; block?: boolean; className?: string }) {
   if (!text) return null;
   const tokens = parseAndTokenizeMath(text, block);
-  if (tokens.length === 0) {
-    return text ? <span className={className}>{text}</span> : null;
+  if (tokens.length === 0) return null;
+
+  const lines = groupTokensIntoLines(tokens);
+  if (lines.length > 1) {
+    return (
+      <div className={`space-y-1.5 ${className || ''}`}>
+        {lines.map((lineTokens, lIdx) => (
+          <div key={`line-${lIdx}`} className="leading-relaxed">
+            {lineTokens.map((token, tIdx) => {
+              if (token.type === 'math') {
+                return (
+                  <KaTeXRenderer
+                    key={`m-${lIdx}-${tIdx}`}
+                    math={token.latex}
+                    block={token.block || block}
+                  />
+                );
+              }
+              return <span key={`t-${lIdx}-${tIdx}`}>{token.content}</span>;
+            })}
+          </div>
+        ))}
+      </div>
+    );
   }
 
   return (
@@ -331,28 +445,6 @@ function RenderSingleMathTextLine({ text, block, className }: { text: string; bl
       })}
     </span>
   );
-}
-
-function RenderSingleMathTextChunk({ text, block, className }: { text: string; block?: boolean; className?: string }) {
-  if (!text) return null;
-  const cleaned = cleanHtmlTags(text);
-  if (!cleaned) return null;
-
-  // Split lines on newlines so statement blocks render one below another
-  const lines = cleaned.split(/\r?\n/).filter(line => line.trim().length > 0);
-  if (lines.length > 1) {
-    return (
-      <div className={`space-y-1.5 ${className || ''}`}>
-        {lines.map((line, lIdx) => (
-          <div key={`line-${lIdx}`} className="leading-relaxed">
-            <RenderSingleMathTextLine text={line} block={block} />
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-  return <RenderSingleMathTextLine text={cleaned} block={block} className={className} />;
 }
 
 const MathTextRendererComponent: React.FC<MathTextRendererProps> = ({

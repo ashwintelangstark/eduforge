@@ -181,7 +181,7 @@ questionBankRouter.get('/', async (req: Request, res: Response, next: NextFuncti
 // GET /api/question-bank/:id
 questionBankRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const rawId = (req.params.id || '').trim();
+    const rawId = String(req.params.id || '').trim();
     if (!rawId) {
       return res.status(404).json({
         success: false,

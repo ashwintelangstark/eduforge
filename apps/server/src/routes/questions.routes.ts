@@ -298,7 +298,7 @@ questionsRouter.get('/', async (req: Request, res: Response, next: NextFunction)
 // GET /api/questions/:id - Single question detail
 questionsRouter.get('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const rawId = (req.params.id || '').trim();
+    const rawId = String(req.params.id || '').trim();
     if (!rawId) {
       return res.status(404).json({ success: false, error: 'Question not found' });
     }
@@ -443,7 +443,7 @@ questionsRouter.post('/', async (req: Request, res: Response, next: NextFunction
 // PUT /api/questions/:id - Update existing question in MySQL (with auto upsert if question doesn't exist)
 questionsRouter.put('/:id', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const rawId = (req.params.id || '').trim();
+    const rawId = String(req.params.id || '').trim();
     const body = await dumpBase64Images(req.body);
     const bodyId = (body.id || '').trim();
     const bodyCode = (body.questionCode || body.question_code || '').trim();

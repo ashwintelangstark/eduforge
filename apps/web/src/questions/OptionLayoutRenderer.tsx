@@ -45,14 +45,19 @@ const EditableOptionItem: React.FC<{
   textColorClass
 }) => {
   const getOptionTextContent = (option: QuestionOption): string => {
+    if (!option) return '';
     if (option.rawText && option.rawText.trim()) return option.rawText.trim();
     if ((option as any).raw_text && String((option as any).raw_text).trim()) return String((option as any).raw_text).trim();
+    if ((option as any).text && String((option as any).text).trim()) return String((option as any).text).trim();
+    if ((option as any).label && String((option as any).label).trim()) return String((option as any).label).trim();
+    if ((option as any).latex && String((option as any).latex).trim()) return `\\(${String((option as any).latex).trim()}\\)`;
+    if ((option as any).rawLatex && String((option as any).rawLatex).trim()) return `\\(${String((option as any).rawLatex).trim()}\\)`;
     if (typeof (option as any).content === 'string' && (option as any).content.trim()) return (option as any).content.trim();
     if (Array.isArray(option.content)) {
       const extracted = (option.content as any[])
         .map(c => {
           if (!c) return '';
-          if (c.latex) return `\\(${c.latex}\\)`;
+          if (c.latex || c.rawLatex) return `\\(${c.latex || c.rawLatex}\\)`;
           return c.html || c.text || '';
         })
         .filter(Boolean)
@@ -61,7 +66,7 @@ const EditableOptionItem: React.FC<{
     }
     if (option.content && typeof option.content === 'object') {
       const obj = option.content as any;
-      if (obj.latex) return `\\(${obj.latex}\\)`;
+      if (obj.latex || obj.rawLatex) return `\\(${obj.latex || obj.rawLatex}\\)`;
       if (obj.html || obj.text) return obj.html || obj.text;
     }
     return '';

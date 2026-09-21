@@ -548,13 +548,16 @@ export const CollegeExamPaper: React.FC<CollegeExamPaperProps> = ({
                       <div className="mt-1 pl-3.5">
                         {(() => {
                           const getOptText = (opt: any) => {
+                            if (!opt) return '';
                             if (opt.rawText && String(opt.rawText).trim()) return String(opt.rawText).trim();
                             if (opt.raw_text && String(opt.raw_text).trim()) return String(opt.raw_text).trim();
                             if (opt.text && String(opt.text).trim()) return String(opt.text).trim();
                             if (opt.label && String(opt.label).trim()) return String(opt.label).trim();
+                            if (opt.latex && String(opt.latex).trim()) return `\\(${String(opt.latex).trim()}\\)`;
+                            if (opt.rawLatex && String(opt.rawLatex).trim()) return `\\(${String(opt.rawLatex).trim()}\\)`;
                             if (typeof opt.content === 'string' && opt.content.trim()) return opt.content.trim();
                             if (Array.isArray(opt.content)) {
-                              return opt.content.map((c: any) => c.latex ? `\\(${c.latex}\\)` : (c.html || c.text || '')).filter(Boolean).join(' ');
+                              return opt.content.map((c: any) => (c.latex || c.rawLatex) ? `\\(${c.latex || c.rawLatex}\\)` : (c.html || c.text || '')).filter(Boolean).join(' ');
                             }
                             return '';
                           };
